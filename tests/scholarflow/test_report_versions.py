@@ -48,3 +48,22 @@ async def test_edited_reports_are_immutable_and_matrix_changes_mark_projection_o
     extractions.edit(original.project_id, paper.paper_id, {'method': 'Correction'}, 1)
     assert service.store.is_outdated(original.id)
     assert service.get(original.id).blocks == blocks
+
+
+@pytest.mark.asyncio
+async def test_edited_citation_can_be_explicitly_rebound_and_rechecked(api, report_context):
+    from backend.scholarflow.persistence.run_store import RunStore
+    service, version, _, _ = report_context
+    RunStore(service.db).put_manifest(version.run_id, 'report', {'report_version_id': version.id}, generation=1)
+    options = await api.get(f'/api/v1/reports/{version.id}/citation-options')
+    assert options.status_code == 200
+    assert options.json()['items'][0]['evidence_id'] == version.occurrences[0].evidence_ids[0]
+    draft = ReportDraft.model_validate(version.model_dump(include=set(ReportDraft.model_fields)))
+    draft.blocks[0] = draft.blocks[0].model_copy(update={'text': version.blocks[0].text.replace('graph.', 'graph!')})
+    response = await api.post(f'/api/v1/projects/{version.project_id}/reports', json={
+        'expected_revision': version.revision, 'draft': draft.model_dump(mode='json'), 'confirmed_binding_blocks': ['first']})
+    assert response.status_code == 201
+    saved = service.get(response.json()['id'])
+    assert saved.occurrences[0].evidence_ids == version.occurrences[0].evidence_ids
+    check = await service.check(saved.id)
+    assert check.checks[0]['status'] == 'supported'

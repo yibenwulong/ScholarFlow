@@ -76,7 +76,7 @@ class ReportService:
     def _bibliography(paper):
         return {name: getattr(paper, name) for name in ('title', 'authors', 'year', 'identifiers', 'source', 'source_id', 'publication_status')}
 
-    def save(self, project_id, draft, expected_revision, *, published_only=False):
+    def save(self, project_id, draft, expected_revision, *, published_only=False, confirmed_binding_blocks=()):
         run = RunStore(self.db).get_run(draft.run_id)
         if run.project_id != project_id:
             raise ScholarError(422, 'wrong_project', 'Run belongs to another project')
@@ -112,7 +112,7 @@ class ReportService:
             prior_blocks = {b.id: b for b in previous.blocks} if previous else {}
             for block in draft.blocks:
                 old = prior_blocks.get(block.id)
-                if old and old.text != block.text and old.claims == block.claims:
+                if old and old.text != block.text and old.claims == block.claims and block.id not in confirmed_binding_blocks:
                     block = block.model_copy(update={'claims': []})
                 blocks.append(block)
             version = ReportVersion(**draft.model_dump(exclude={'blocks', 'bindings', 'occurrences'}),

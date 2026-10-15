@@ -19,6 +19,22 @@ def candidate(source_id='one', **changes):
                           source_id=source_id, **changes)
 
 
+def test_missing_access_metadata_is_enriched_without_mutating_original_version(library):
+    from backend.scholarflow.domain.library import PaperVersion, SourceRecord
+    project = library.projects.create(ProjectCreate(question='Q'))
+    first = library.import_candidates(project.id, [candidate(identifiers={'doi': '10.1000/enrich'})])[0]
+    later = PaperCandidate(title='A scientific paper', source='openalex', source_id='W123',
+        identifiers={'doi': '10.1000/enrich'}, abstract='The method uses a graph.', pdf_url='https://example.org/paper.pdf')
+    library.import_candidates(project.id, [later])
+    row = library.list_project(project.id)[0]
+    assert row['version']['abstract'] == later.abstract
+    assert row['version']['pdf_url'] == later.pdf_url
+    stored = library.store.records.get('paper_version', first.paper_version_id, PaperVersion)
+    assert stored.abstract is None and stored.pdf_url is None
+    records = library.store.records.list('source_record', SourceRecord)
+    assert row['metadata_sources']['abstract'] in [r.id for r in records if r.source == 'openalex']
+
+
 def test_same_doi_reuses_version_but_preprint_keeps_its_own_version(library):
     project = library.projects.create(ProjectCreate(question='Q'))
     first = library.import_candidates(project.id, [candidate(identifiers={'doi': 'https://doi.org/10.1000/ABC'})])[0]

@@ -131,11 +131,13 @@ class ExtractionService:
             links += [('claim', c.id) for c in claims] + [('evidence', e.id) for e in evidence]
             return self.records.insert('extraction', extraction, project_id=project.id, links=links, conn=conn)
 
-    def edit(self, project_id, paper_id, changes, expected_revision, *, published_only=False):
-        association = PaperStore(self.db).association(project_id, paper_id)
+    def edit(self, project_id, paper_id, changes, expected_revision, *, published_only=False, expected_paper_version_id=None):
         if set(changes) - set(FIELD_NAMES):
             raise ScholarError(422, 'unknown_field', 'Only comparison matrix fields can be edited')
         with self.db.transaction() as conn:
+            association = PaperStore(self.db).association(project_id, paper_id, conn)
+            if expected_paper_version_id and association.paper_version_id != expected_paper_version_id:
+                raise ScholarError(409, 'paper_version_changed', 'The selected paper version changed; reload before editing its extraction')
             latest = self.latest(project_id, association.paper_version_id, conn)
             if published_only:
                 from ..persistence.projections import Published

@@ -5,15 +5,14 @@
 If you believe you've found a security issue that falls within the threat model
 described below, please report it privately rather than opening a public issue:
 
-- Use GitHub's [private vulnerability reporting](https://github.com/assafelovic/gpt-researcher/security/advisories/new), **or**
-- Email the maintainer at **assaf.elovic@gmail.com** with details and, ideally, a proof of concept.
+- Use [private vulnerability reporting for ScholarFlow](https://github.com/yibenwulong/ScholarFlow/security/advisories/new) when enabled. If unavailable, open an issue requesting a private contact channel without including exploit details, credentials or private papers.
 
 We aim to acknowledge reports within a few business days. Please give us a
 reasonable window to investigate and ship a fix before any public disclosure.
 
 ## Threat model — please read before reporting
 
-GPT-Researcher is **open-source software that you, the operator, run in your own
+ScholarFlow is **open-source software that you, the operator, run in your own
 environment.** Understanding the intended deployment model avoids duplicate
 reports for behavior that is by design.
 

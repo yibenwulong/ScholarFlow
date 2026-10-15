@@ -1,4 +1,5 @@
 import hashlib
+import json
 from io import BytesIO
 import os
 import re
@@ -30,7 +31,7 @@ class ExportService:
     def list(self, version_id):
         return [j for j in self.records.list('export', ExportJob) if j.report_version_id == version_id]
 
-    def request(self, version_id, format, verification_id, draft_acceptance_id, operation_key):
+    def request(self, version_id, format, verification_id, draft_acceptance_id, operation_key, *, published_only=False):
         if format not in FORMATS:
             raise ScholarError(422, 'invalid_export_format', 'Choose markdown, docx or bibtex')
         inputs = {'format': format, 'verification_id': verification_id, 'draft_acceptance_id': draft_acceptance_id}
@@ -45,6 +46,9 @@ class ExportService:
             check = self.records.get('verification', verification_id, VerificationRecord, conn)
             if check.report_version_id != report.id:
                 raise ScholarError(409, 'verification_version_mismatch', 'Export must use a check of this exact version')
+            current = self.reports.verifications(report.id, published_only=published_only)
+            if not current or current[0].id != check.id:
+                raise ScholarError(409, 'verification_outdated', 'A newer check exists; review the current verification before exporting')
             draft = check.quality_status != 'passed'
             if draft:
                 if not draft_acceptance_id:
@@ -70,7 +74,8 @@ class ExportService:
     def build(self, job_id):
         job = self.get(job_id)
         report = self.reports.get(job.report_version_id)
-        rendered = render_citations(report)
+        check = self.records.get('verification', job.verification_id, VerificationRecord)
+        rendered = render_citations(report, checks=check.checks)
         marker = 'DRAFT — issues explicitly accepted by the user; model checks are not factual guarantees.' if job.draft else 'Model support checks recorded; human scholarly review remains necessary.'
         audit = f'Report version: {report.id}\nVerification: {job.verification_id}\n{marker}'
         source_lines = []
@@ -83,6 +88,12 @@ class ExportService:
             appendix += '\n\n## Reading coverage\n\n' + '\n\n'.join(
                 f"{label}: {', '.join(coverage.get(key, [])) or 'None'}" for label, key in [
                     ('Included', 'selected_paper_version_ids'), ('Abstract only', 'abstract_only_paper_version_ids'), ('Unreadable', 'unreadable_paper_version_ids')])
+        appendix += '\n\n## Search provenance\n\n' + json.dumps(coverage.get('search_results', []), ensure_ascii=False, sort_keys=True, indent=2)
+        issues = [item for item in check.checks if item['status'] != 'supported']
+        appendix += '\n\n## Verification issues\n\n' + ('\n\n'.join(
+            f"Occurrence {item.get('occurrence_id', 'unbound')}; block {item.get('block_id', 'see occurrence')}; "
+            f"{item['status']}; checker {item.get('checker', check.checker)}: {item.get('reason', '')}"
+            for item in issues) or 'None recorded in this verification.')
         markdown = audit + '\n\n' + rendered.markdown + appendix
         if job.format == 'markdown':
             data = markdown.encode('utf-8')
@@ -105,7 +116,7 @@ class ExportService:
             def escape(value):
                 replacements = {'\\': r'\textbackslash{}', '{': r'\{', '}': r'\}', '\n': ' '}
                 return ''.join(replacements.get(char, char) for char in str(value))
-            entries = ['% ' + audit.replace('\n', '\n% ')]
+            entries = ['% ' + (audit + appendix).replace('\n', '\n% ')]
             for ref in rendered.references:
                 fields = {'title': ref.get('title'), 'author': ' and '.join(ref.get('authors') or []), 'year': ref.get('year'),
                           'doi': ref.get('identifiers', {}).get('doi'), 'eprint': ref.get('identifiers', {}).get('arxiv')}

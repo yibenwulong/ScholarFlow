@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from 'next/link';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useResearchHistoryContext } from '@/hooks/ResearchHistoryContext';
 import { useScrollHandler } from '@/hooks/useScrollHandler';
@@ -886,6 +887,7 @@ export default function Home() {
 
   return (
     <>
+      <Link href="/projects" className="fixed bottom-5 left-5 z-50 rounded-lg border border-blue-300 bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-lg">ScholarFlow 科研工作台 →</Link>
       {isMobile ? (
         // Mobile view - simplified layout with focus on chat
         getAppropriateLayout({

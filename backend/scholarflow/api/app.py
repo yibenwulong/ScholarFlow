@@ -39,6 +39,10 @@ def install_error_handlers(app, *, prefix=None):
 
 def create_router(services: ScholarServices) -> APIRouter:
     router = APIRouter(prefix='/api/v1')
+    @router.get('/status')
+    def status():
+        return {'demo': services.settings.demo, 'max_included_papers': services.settings.max_included_papers,
+                'max_model_calls': services.settings.max_model_calls}
     router.include_router(project_router(services))
     router.include_router(library_router(services))
     router.include_router(run_router(services))

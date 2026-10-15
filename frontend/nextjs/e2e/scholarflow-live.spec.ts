@@ -1,0 +1,44 @@
+import { test, expect } from '@playwright/test';
+
+test.skip(process.env.SCHOLARFLOW_LIVE_TEST !== 'true', 'Requires the explicitly configured synthetic API and separate worker');
+test('真实 API 与独立 worker 完成科研调研', async ({ page, request }, testInfo) => {
+  test.setTimeout(150000);
+  await page.goto('/projects');
+  await page.getByRole('textbox', { name: '研究问题', exact: true }).fill('Synthetic graph collaboration ' + Date.now());
+  await page.getByRole('button', { name: '创建项目', exact: true }).click();
+  await expect(page).toHaveURL(/\/projects\/[a-f0-9-]+/, { timeout: 30000 });
+  await expect(page.getByText('演示模式 · 合成文献与固定模型响应', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '生成检索计划', exact: true }).click();
+  await expect(page.getByRole('button', { name: '批准此计划', exact: true })).toBeEnabled({ timeout: 30000 });
+  await page.getByRole('button', { name: '批准此计划', exact: true }).click();
+  await page.getByRole('link', { name: '文献库', exact: true }).click();
+  await page.getByRole('checkbox', { name: '纳入 Synthetic Graph Collaboration A', exact: true }).check({ timeout: 30000 });
+  await page.getByRole('checkbox', { name: '纳入 Synthetic Graph Collaboration B', exact: true }).check();
+  await page.getByRole('button', { name: '确认纳入并分析' }).click();
+  await page.getByRole('link', { name: '研究报告', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toBeVisible({ timeout: 40000 });
+  await expect(page.getByText('质量检查通过', { exact: true }).first()).toBeVisible();
+  await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('A user edited interpretation. [@' +
+    (await page.getByRole('textbox', { name: '报告正文', exact: true }).inputValue()).split('[@')[1]);
+  await page.getByRole('textbox', { name: '报告正文', exact: true }).evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(0, 'A user edited interpretation.'.length));
+  await page.getByRole('button', { name: '使用所选文字作为论断' }).click();
+  const evidence = page.getByRole('combobox', { name: '原文依据', exact: true });
+  await expect(evidence.locator('option')).toHaveCount(2);
+  await evidence.selectOption({ index: 1 });
+  await page.getByRole('button', { name: '确认此处引用绑定' }).click();
+  await page.getByRole('button', { name: '保存新报告版本' }).click();
+  await expect(page.getByText('存在未保存修改', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '复核此版本' }).click();
+  await expect(page.getByRole('button', { name: '接受此版本草稿' })).toBeVisible({ timeout: 30000 });
+  await page.getByRole('button', { name: '接受此版本草稿' }).click();
+  await expect(page.getByRole('button', { name: '导出已保存版本' })).toBeEnabled();
+  await page.getByRole('button', { name: '导出已保存版本' }).click();
+  const download = page.getByRole('link', { name: '下载 markdown 草稿', exact: true });
+  await expect(download).toBeVisible({ timeout: 30000 });
+  const file = await request.get((await download.getAttribute('href'))!);
+  expect(file.status()).toBe(200);
+  expect(await file.text()).toContain('DRAFT');
+  expect(await file.text()).toContain('Verification issues');
+  expect(await file.text()).toContain('needs_recheck');
+  await page.screenshot({ path: testInfo.outputPath('report-workspace.png'), fullPage: true });
+});

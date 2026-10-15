@@ -15,7 +15,11 @@ async def drive_auxiliary(services, run, generation):
             record = await services.reports.check(run.target_id, run_id=run.id)
             return {'report_version_id': run.target_id, 'verification_record_id': record.id, 'quality_status': record.quality_status}
         raise ScholarError(422, 'unsupported_operation', 'Unknown auxiliary operation')
-    result = await executor.execute(run.id, run.kind, {'target_id': run.target_id, 'model': run.request_snapshot['model']}, operation)
+    inputs = {'target_id': run.target_id, 'model': run.request_snapshot['model']}
+    if run.kind == 'report_check':
+        # Explicit rechecks are fresh operations; recovery of this run may reuse its result.
+        inputs['check_run_id'] = run.id
+    result = await executor.execute(run.id, run.kind, inputs, operation)
     with services.db.transaction() as conn:
         current = store.get_run(run.id, conn)
         if current.execution_generation != generation or current.status == 'cancelled':

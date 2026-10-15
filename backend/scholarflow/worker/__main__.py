@@ -9,6 +9,8 @@ from .runner import Worker
 
 
 async def main(once=False):
+    from dotenv import load_dotenv
+    load_dotenv()
     services = ScholarServices.create(ScholarSettings.from_env())
     async with WorkflowRuntime(services) as runtime:
         worker = Worker(services.runs.store, driver=runtime.driver,

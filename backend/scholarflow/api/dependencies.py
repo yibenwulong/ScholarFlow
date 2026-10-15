@@ -40,5 +40,9 @@ class ScholarServices:
     def create(cls, settings):
         db = Database(settings.database_path)
         db.initialize()
-        return cls(settings, db, ProjectService(db), LibraryService(db, settings), DocumentService(db, settings)).configure_models(
-            ModelGateway(db, max_calls=settings.max_model_calls))
+        if settings.demo:
+            from ..demo import DemoModel
+            gateway = ModelGateway(db, dispatch=DemoModel().complete, max_calls=settings.max_model_calls)
+        else:
+            gateway = ModelGateway(db, max_calls=settings.max_model_calls)
+        return cls(settings, db, ProjectService(db), LibraryService(db, settings), DocumentService(db, settings)).configure_models(gateway)

@@ -31,6 +31,7 @@ class SourceRecord(Entity):
     source_id: str
     query: str | None = None
     metadata: dict = Field(default_factory=dict)
+    normalized: PaperCandidate | None = None
 
 
 class ProjectPaper(Entity):

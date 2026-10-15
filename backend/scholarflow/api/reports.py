@@ -6,6 +6,7 @@ from ..domain.common import Model
 from ..domain.errors import not_found
 from ..domain.operations import ExportFormat
 from ..domain.reports import ReportDraft
+from ..domain.evidence import ClaimRevision, Evidence, ExtractionRevision
 from ..domain.runs import RunCreate
 from ..persistence.projections import Published
 from ..services.citations import render_citations
@@ -17,6 +18,7 @@ from .runs import operation_key
 class ReportWrite(Model):
     expected_revision: int = Field(ge=0)
     draft: ReportDraft
+    confirmed_binding_blocks: list[str] = Field(default_factory=list)
 
 
 class ExportWrite(Model):
@@ -42,7 +44,8 @@ def report_router(services):
 
     @router.post('/projects/{project_id}/reports', status_code=201)
     def save(project_id: str, data: ReportWrite):
-        result = services.reports.save(project_id, data.draft, data.expected_revision, published_only=True)
+        result = services.reports.save(project_id, data.draft, data.expected_revision, published_only=True,
+                                       confirmed_binding_blocks=data.confirmed_binding_blocks)
         with services.db.transaction() as conn:
             conn.execute('INSERT INTO entity_links(owner_id,relation,target_id) VALUES (?,?,?)', (result.id, 'human_publication', result.run_id))
         return result
@@ -60,12 +63,34 @@ def report_router(services):
         version = published(version_id)
         return services.runs.create(version.project_id, RunCreate(kind='report_check', target_id=version.id), operation_key(key))
 
+    @router.get('/reports/{version_id}/citation-options')
+    def citation_options(version_id: str):
+        version = published(version_id)
+        keys = {b.paper_version_id: b for b in version.bindings}
+        items, seen = [], set()
+        for extraction_id in version.manifest.get('extraction_ids', []):
+            extraction = services.reports.records.get('extraction', extraction_id, ExtractionRevision)
+            binding = keys.get(extraction.paper_version_id)
+            if not binding:
+                continue
+            for field in extraction.fields.values():
+                for eid in field.evidence_ids:
+                    if eid in seen:
+                        continue
+                    seen.add(eid)
+                    evidence = services.reports.records.get('evidence', eid, Evidence)
+                    claim = services.reports.records.get('claim', evidence.claim_revision_id, ClaimRevision)
+                    items.append({'key': binding.key, 'title': binding.bibliography_snapshot['title'],
+                        'claim_revision_id': claim.id, 'evidence_id': eid, 'quote': evidence.quote,
+                        'source_scope': claim.source_scope, 'locator_status': evidence.locator_status})
+        return page(items)
+
     @router.post('/reports/{version_id}/exports', status_code=202)
     def export(version_id: str, data: ExportWrite, key: str | None = Header(default=None, alias='Idempotency-Key')):
         version = published(version_id)
         if data.verification_id not in Published(services.db).verification_ids(version.project_id):
             raise not_found('published verification record')
-        job = services.exports.request(version.id, data.format, data.verification_id, data.draft_acceptance_id, operation_key(key))
+        job = services.exports.request(version.id, data.format, data.verification_id, data.draft_acceptance_id, operation_key(key), published_only=True)
         run = services.runs.create(version.project_id, RunCreate(kind='export', target_id=job.id), 'export:' + job.id)
         return {'export': job, 'run_id': run.id}
 

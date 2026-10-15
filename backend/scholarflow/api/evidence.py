@@ -11,6 +11,7 @@ from .projects import page
 
 class ExtractionEdit(Model):
     expected_revision: int = Field(ge=1)
+    paper_version_id: str
     changes: dict[str, str | None]
 
 
@@ -39,7 +40,8 @@ def evidence_router(services):
 
     @router.patch('/projects/{project_id}/extractions/{paper_id}')
     def edit(project_id: str, paper_id: str, data: ExtractionEdit):
-        return services.extractions.edit(project_id, paper_id, data.changes, data.expected_revision, published_only=True)
+        return services.extractions.edit(project_id, paper_id, data.changes, data.expected_revision, published_only=True,
+                                         expected_paper_version_id=data.paper_version_id)
 
     @router.get('/claims/{claim_id}/evidence')
     def evidence(claim_id: str):

@@ -16,7 +16,7 @@ def citation_tokens(text):
     return list(CITATION.finditer(text))
 
 
-def render_citations(version):
+def render_citations(version, *, checks=None):
     bindings = {b.key: b for b in version.bindings}
     numbers, references, sections = {}, [], ['# ' + version.title]
     def replace(match):
@@ -31,7 +31,14 @@ def render_citations(version):
     for block in version.blocks:
         if block.heading:
             sections.append('## ' + block.heading)
-        sections.append(CITATION.sub(replace, block.text))
+        index = [0]
+        def annotated(match):
+            marker = replace(match)
+            occurrence = next((o for o in version.occurrences if o.block_id == block.id and o.token_index == index[0]), None)
+            index[0] += 1
+            issue = next((c for c in checks or [] if occurrence and c.get('occurrence_id') == occurrence.id and c['status'] != 'supported'), None)
+            return marker + (f" **[WARNING: {issue['status']}; {issue.get('reason', '')}]**" if issue else '')
+        sections.append(CITATION.sub(annotated, block.text))
     sections.append('## References')
     for ref in references:
         authors = ', '.join(ref.get('authors') or []) or 'Authors unreported'

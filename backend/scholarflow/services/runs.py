@@ -53,8 +53,14 @@ class RunService:
             model_name = os.getenv('SCHOLARFLOW_MODEL', os.getenv('SMART_LLM', 'openai:gpt-4o-mini'))
             provider, _, model = model_name.partition(':')
             config = ModelConfig(provider=provider, model=model) if model else ModelConfig(model=provider)
+            if self.settings.demo:
+                config = ModelConfig(provider='demo', model='synthetic-v1')
             snapshot = {'project': project.model_dump(mode='json'), 'model': config.model_dump(),
                         'limits': {'max_model_calls': self.settings.max_model_calls, 'search_limit': self.settings.search_limit}}
+            if data.kind == 'literature_review':
+                from ..persistence.projections import Published
+                snapshot['human_extractions'] = {pid: item.id for pid, item in Published(self.db).extractions(project_id, conn).items()
+                                                 if item.origin == 'human'}
             run = Run(project_id=project_id, **data.model_dump(), request_snapshot=snapshot, stage=data.start_at)
             manifests = {}
             if data.kind == 'literature_review':

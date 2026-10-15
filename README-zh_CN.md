@@ -1,179 +1,77 @@
-<div align="center">
-<!--<h1 style="display: flex; align-items: center; gap: 10px;">
-  <img src="https://github.com/assafelovic/gpt-researcher/assets/13554167/a45bac7c-092c-42e5-8eb6-69acbf20dde5" alt="Logo" width="25">
-  GPT Researcher
-</h1>-->
-<img src="https://github.com/assafelovic/gpt-researcher/assets/13554167/20af8286-b386-44a5-9a83-3be1365139c3" alt="Logo" width="80">
+# ScholarFlow
 
+面向研究生和科研人员的多智能体科研文献研究与报告生成平台，基于 [GPT Researcher](https://github.com/assafelovic/gpt-researcher) 改造。新工作台入口为 **`/projects`**，原通用研究入口保留。
 
-####
+## 核心流程
 
-[![Website](https://img.shields.io/badge/Official%20Website-gptr.dev-teal?style=for-the-badge&logo=world&logoColor=white&color=0891b2)](https://gptr.dev)
-[![Documentation](https://img.shields.io/badge/Documentation-DOCS-f472b6?logo=googledocs&logoColor=white&style=for-the-badge)](https://docs.gptr.dev)
-[![Discord Follow](https://img.shields.io/discord/1127851779011391548?style=for-the-badge&logo=discord&label=Chat%20on%20Discord)](https://discord.gg/QgZXvJAccX)
+创建研究问题 → 生成／编辑检索计划 → **人工批准** → 学术检索与筛选建议 → **人工确认纳入集合** → 文档准备 → 并行逐篇阅读 → 综合写作 → 逐处引用核验 → 保存与导出。
 
-[![PyPI version](https://img.shields.io/pypi/v/gpt-researcher?logo=pypi&logoColor=white&style=flat)](https://badge.fury.io/py/gpt-researcher)
-![GitHub Release](https://img.shields.io/github/v/release/assafelovic/gpt-researcher?style=flat&logo=github)
-[![Open In Colab](https://img.shields.io/static/v1?message=Open%20in%20Colab&logo=googlecolab&labelColor=grey&color=yellow&label=%20&style=flat&logoSize=40)](https://colab.research.google.com/github/assafelovic/gpt-researcher/blob/master/docs/docs/examples/pip-run.ipynb)
-[![Docker Image Version](https://img.shields.io/docker/v/elestio/gpt-researcher/latest?arch=amd64&style=flat&logo=docker&logoColor=white&color=1D63ED)](https://hub.docker.com/r/gptresearcher/gpt-researcher)
-[![Twitter Follow](https://img.shields.io/twitter/follow/assaf_elovic?style=social)](https://twitter.com/assaf_elovic)
+- 接入 arXiv、Semantic Scholar、OpenAlex；没有开放 PDF 的论文仍保留元数据和可用摘要。
+- 区分全文与仅摘要依据；证据绑定文档哈希、不可变版本、原文片段和从 1 开始的 PDF 物理页。
+- 比较矩阵保留研究问题、方法、研究对象／数据集、发现和局限；缺失字段显示“未报告”，人工修改另存修订并待复核。
+- 每次报告编辑创建新版本。同一篇论文的不同引用位置分别核验，不能以一个位置通过代替另一处检查。
+- Markdown、DOCX 和 BibTeX 绑定同一已保存版本；问题草稿需要确认明确版本及检查记录，导出保留草稿标记。
+- SQLite 持久化任务、进度事件与图检查点；默认纳入最多 20 篇、阅读并发 2、模型尝试预算 100、自动改写最多 1 次。
 
-[English](README.md) |
-[中文](README-zh_CN.md) |
-[日本語](README-ja_JP.md) |
-[한국어](README-ko_KR.md) |
-[Русский](README-ru_RU.md)
-</div>
+执行完成和质量通过分开显示。模型的支持性判断用于辅助复核，不构成事实保证，也不保证检索覆盖完整。
 
-# 🔎 GPT Researcher
+## 本地启动
 
-**GPT Researcher 是一个智能体代理，专为各种任务的综合在线研究而设计。**
+需要 Python **3.12+**、Node **22+**。在项目根目录创建并激活虚拟环境后：
 
-代理可以生成详细、正式且客观的研究报告，并提供自定义选项，专注于相关资源、结构框架和经验报告。GPT Researcher 早已不止于 RAG：规划代理与执行代理将每个任务拆解为研究问题，[决策模型](https://docs.gptr.dev/docs/gpt-researcher/gptr/context-filter)只保留真正有助于回答问题的上下文，[多代理](https://docs.gptr.dev/docs/gpt-researcher/multi_agents/langgraph)工作流协调各专业代理完成从规划到发布的全过程，[递归深度研究](https://docs.gptr.dev/docs/gpt-researcher/gptr/deep_research)则从广度和深度两方面探索主题。研究并行执行，因此快速、稳定、可靠，并能减少错误信息。
-
-**我们的使命是利用人工智能的力量，为个人和组织提供准确、客观和事实的信息。**
-
-## 为什么选择GPT Researcher?
-
-- 因为人工研究任务形成客观结论可能需要时间和经历，有时甚至需要数周才能找到正确的资源和信息。
-- 目前的LLM是根据历史和过时的信息进行训练的，存在严重的幻觉风险，因此几乎无法胜任研究任务。
-- 网络搜索的解决方案（例如 ChatGPT + Web 插件）仅考虑有限的资源和内容，在某些情况下会导致肤浅的结论或不客观的答案。
-- 只使用部分资源可能会在确定研究问题或任务的正确结论时产生偏差。
-
-## 架构
-主要思想是运行“**计划者**”和“**执行**”代理，而**计划者**生成问题进行研究，“**执行**”代理根据每个生成的研究问题寻找最相关的信息。最后，“**计划者**”过滤和聚合所有相关信息并创建研究报告。<br /> <br /> 
-代理同时利用 gpt-40-mini 和 gpt-4o（128K 上下文）来完成一项研究任务。我们仅在必要时使用这两种方法对成本进行优化。**研究任务平均耗时约 3 分钟，成本约为 ~0.1 美元**。
-
-<div align="center">
-<img align="center" height="500" src="https://cowriter-images.s3.amazonaws.com/architecture.png">
-</div>
-
-
-详细说明:
-* 根据研究搜索或任务创建特定领域的代理。
-* 生成一组研究问题，这些问题共同形成答案对任何给定任务的客观意见。
-* 针对每个研究问题，触发一个爬虫代理，从在线资源中搜索与给定任务相关的信息。
-* 对于每一个抓取的资源，根据相关信息进行汇总，并跟踪其来源。
-* 最后，对所有汇总的资料来源进行过滤和汇总，并生成最终研究报告。
-
-## 演示
-https://github.com/assafelovic/gpt-researcher/assets/13554167/a00c89a6-a295-4dd0-b58d-098a31c40fda
-
-## 教程
- - [运行原理](https://docs.gptr.dev/blog/building-gpt-researcher)
- - [如何安装](https://www.loom.com/share/04ebffb6ed2a4520a27c3e3addcdde20?sid=da1848e8-b1f1-42d1-93c3-5b0b9c3b24ea)
- - [现场演示](https://www.loom.com/share/6a3385db4e8747a1913dd85a7834846f?sid=a740fd5b-2aa3-457e-8fb7-86976f59f9b8)
-
-## 特性
-- 📝 生成研究问题、大纲、资源和课题报告
-- 🌐 每项研究汇总超过20个网络资源，形成客观和真实的结论
-- 🖥️ 包括易于使用的web界面 (HTML/CSS/JS)
-- 🔍 支持JavaScript网络资源抓取功能
-- 📂 追踪访问过和使用过的网络资源和来源
-- 📄 将研究报告导出为PDF或其他格式...
-
-## 📖 文档
-
-请参阅[此处](https://docs.gptr.dev/docs/gpt-researcher/getting-started/introduction)，了解完整文档：
-
-- 入门（安装、设置环境、简单示例）
-- 操作示例（演示、集成、docker 支持）
-- 参考资料（API完整文档）
-- Tavily 应用程序接口集成（核心概念的高级解释）
-
-## 快速开始
-> **步骤 0** - 安装 Python 3.12 或更高版本。[参见此处](https://www.tutorialsteacher.com/python/install-python) 获取详细指南。
-
-<br />
-
-> **步骤 1** - 下载项目
-
-```bash
-$ git clone https://github.com/assafelovic/gpt-researcher.git
-$ cd gpt-researcher
+```powershell
+python -m pip install -e ".[test,scholarflow]"
+Copy-Item .env.example .env
 ```
 
-<br />
+在 `.env` 设置模型密钥及 `SCHOLARFLOW_MODEL=provider:model`。支持 OpenAI 兼容接口、Azure OpenAI、Anthropic、Ollama；Anthropic 需要另装 `langchain-anthropic`。密钥只配置在服务端。
 
-> **步骤2** -安装依赖项
-```bash
-$ pip install -r requirements.txt
-```
-<br />
+分别在两个终端运行：
 
-> **第 3 步** - 使用 OpenAI 密钥和 Tavily API 密钥创建 .env 文件，或直接导出该文件
-
-```bash
-$ export OPENAI_API_KEY={Your OpenAI API Key here}
-```
-```bash
-$ export TAVILY_API_KEY={Your Tavily API Key here}
+```powershell
+python -m uvicorn main:app --host 127.0.0.1 --port 8000
+python -m backend.scholarflow.worker
 ```
 
-（可选）如需开启全链路追踪和可观测性，可设置：
+第三个终端启动前端：
 
-```bash
-# $ export LANGCHAIN_TRACING_V2=true
-# $ export LANGCHAIN_API_KEY={Your LangChain API Key here}
+```powershell
+cd frontend/nextjs
+npm ci
+npm run dev
 ```
 
-- **LLM，我们推荐使用 [OpenAI GPT](https://platform.openai.com/docs/guides/gpt)**，但您也可以使用 [Langchain Adapter](https://python.langchain.com/docs/guides/adapters/openai) 支持的任何其他 LLM 模型（包括开源），只需在 gpt_researcher/config/variables/default.py 中更改 llm 模型和提供者即可。请按照 [这份指南](https://python.langchain.com/docs/integrations/llms/) 学习如何将 LLM 与 Langchain 集成。
-- **对于搜索引擎，我们推荐使用 [Tavily Search API](https://app.tavily.com)（已针对 LLM 进行优化）**，但您也可以选择其他搜索引擎，只需将 gpt_researcher/config/variables/default.py 中的搜索提供程序更改为 "duckduckgo"、"googleAPI"、"searchapi"、"googleSerp "或 "searx "即可。然后在 gpt_researcher/config/variables/default.py 文件中添加相应的 env API 密钥。
-- **我们强烈建议使用 [OpenAI GPT](https://platform.openai.com/docs/guides/gpt) 模型和 [Tavily Search API](https://app.tavily.com) 以获得最佳性能。**
-<br />
+打开 **http://localhost:3000/projects**。API 与 worker 必须使用相同的 `SCHOLARFLOW_DATA_DIR`；前端服务端代理地址由 `SCHOLARFLOW_API_URL` 配置，默认 `http://127.0.0.1:8000`。
 
-> **第 4 步** - 使用 FastAPI 运行代理
+## 无密钥完整演示
 
-```bash
-$ uvicorn main:app --reload
+```powershell
+python scripts/scholarflow_demo.py --port 8000
 ```
-<br />
 
-> **第 5 步** - 在任何浏览器上访问 http://localhost:8000，享受研究乐趣！
+另行启动前端。此命令运行真实 API 和独立 worker，但明确使用**自建合成文献、PDF 和固定模型响应**；页面显示演示标签，不调用外部模型。创建项目并批准计划，选择两篇 “Synthetic Graph Collaboration” 文献，就能体验物理页证据、矩阵、报告编辑与导出。真实模式缺少密钥时不会自动切换成演示。
 
-要了解如何开始使用 Docker 或了解有关功能和服务的更多信息，请访问 [documentation](https://docs.gptr.dev) 页面。
+## 容器、测试与边界
 
-## 🔍 可观测性
+`docker compose up --build` 启动 API、worker、前端，入口为 **`/projects`**；`.env` 中设置 `SCHOLARFLOW_DEMO=true` 可显式运行演示。实例数据存储于共享具名卷。默认仅监听本机。此 Compose 配置覆盖 ScholarFlow 工作台，继承的通用研究界面另有浏览器 API／输出代理地址配置。
 
-GPT Researcher 支持 **LangSmith** 以增强链路追踪和可观测性，特别适用于调试和优化复杂的多智能体工作流。
+```powershell
+$env:GPTR_BLOCK_NETWORK='1'
+python -m pytest tests/scholarflow -q
+cd frontend/nextjs
+npm run lint
+npm exec tsc -- --noEmit
+npm run build
+$env:PLAYWRIGHT_CHANNEL='msedge'
+npm run test:e2e -- --workers=1
+$env:SCHOLARFLOW_LIVE_TEST='true'
+npm run test:e2e -- e2e/scholarflow-live.spec.ts --workers=1
+```
 
-要开启追踪：
-1. 设置以下环境变量：
-   ```bash
-   export LANGCHAIN_TRACING_V2=true
-   export LANGCHAIN_API_KEY=您的_API_KEY
-   export LANGCHAIN_PROJECT="gpt-researcher"
-   ```
-2. 正常运行研究任务。所有基于 LangGraph 的智能体交互将自动被追踪，并可在您的 LangSmith 控制台中查看可视化结果。
+没有 Edge 时安装 Playwright Chromium：`npx playwright install chromium`。可通过 `PLAYWRIGHT_PYTHON` 指定 Python，测试端口可通过 `PLAYWRIGHT_PORT`、`PLAYWRIGHT_API_PORT` 修改。
 
-## 🚀 贡献
-我们非常欢迎您的贡献！如果您感兴趣，请查看 [contributing](CONTRIBUTING.md)。
+v0.1 面向本地或可信网络的单用户使用，没有公共多用户认证。支持带文本层的 PDF；扫描件需先做 OCR。外部服务可能限流或缺少摘要／全文，页面保留具体错误与覆盖信息。原文、检查记录和报告版本不因后续编辑而覆盖。调用完成但响应落库前中断，可能产生重复调用及费用；无法取得用量或价格时显示未知。URL 检查仍有 DNS 二次解析的已知边界。
 
-如果您有兴趣加入我们的任务，请查看我们的 [路线图](https://trello.com/b/3O7KBePw/gpt-researcher-roadmap) 页面，并通过我们的 [Discord 社区](https://discord.gg/QgZXvJAccX) 联系我们。
+论文原件、报告、数据库、缓存和密钥不随代码上传；仅在具有分发权时分享原文。停止 API／worker 后备份整个数据目录。
 
-## ✉️ 支持 / 联系我们
-- [社区讨论区](https://discord.gg/spBgZmm3Xe)
-- 我们的邮箱: support@tavily.com
-
-## 🛡 免责声明
-
-本项目 "GPT Researcher "是一个实验性应用程序，按 "现状 "提供，不做任何明示或暗示的保证。我们根据 MIT 许可分享用于学术目的的代码。本文不提供任何学术建议，也不建议在学术或研究论文中使用。
-
-我们对客观研究主张的看法：
-1.  我们抓取系统的全部目的是减少不正确的事实。如何解决？我们抓取的网站越多，错误数据的可能性就越小。我们每项研究都会收集20条信息，它们全部错误的可能性极低。
-2. 我们的目标不是消除偏见，而是尽可能减少偏见。**作为一个社区，我们在这里探索最有效的人机互动**。
-3. 在研究过程中，人们也容易产生偏见，因为大多数人对自己研究的课题都有自己的看法。这个工具可以搜罗到许多观点，并均匀地解释各种不同的观点，而有偏见的人是绝对读不到这些观点的。
-
-**请注意，使用 GPT-4 语言模型可能会因使用令牌而产生高昂费用**。使用本项目即表示您承认有责任监控和管理自己的令牌使用情况及相关费用。强烈建议您定期检查 OpenAI API 的使用情况，并设置任何必要的限制或警报，以防止发生意外费用。
-
----
-
-<p align="center">
-<a href="https://star-history.com/#assafelovic/gpt-researcher">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=assafelovic/gpt-researcher&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=assafelovic/gpt-researcher&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=assafelovic/gpt-researcher&type=Date" />
-  </picture>
-</a>
-</p>
+完整说明见 [架构与数据边界](docs/scholarflow/architecture.md)、[评估协议](docs/scholarflow/evaluation.md)、[贡献说明](CONTRIBUTING.md)。项目遵循根 [Apache-2.0 LICENSE](LICENSE)，上游归属及继承的许可证元数据差异处理见 [UPSTREAM.md](UPSTREAM.md)。

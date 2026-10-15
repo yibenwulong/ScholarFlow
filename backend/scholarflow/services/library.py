@@ -51,7 +51,8 @@ class LibraryService:
                     self.store.records.insert('paper_version', version, links=[('paper', paper_id)], conn=conn)
                     versions.append(version)
                 source = SourceRecord(paper_version_id=version.id, source=candidate.source,
-                                      source_id=candidate.source_id, query=query, metadata=candidate.raw_metadata)
+                                      source_id=candidate.source_id, query=query, metadata=candidate.raw_metadata,
+                                      normalized=candidate)
                 self.store.records.insert('source_record', source, links=[('version', version.id)], conn=conn)
                 associations = self.store.associations(project_id, conn)
                 association = next((p for p in associations if p.paper_id == version.paper_id), None)
@@ -70,13 +71,32 @@ class LibraryService:
         self.store.records.get('paper', paper_id, Paper)
         return [v for v in self.store.versions() if v.paper_id == paper_id]
 
+    def available_metadata(self, version_id, *, source_ids=None):
+        """Fill missing access metadata without changing immutable paper/source records."""
+        version = self.store.records.get('paper_version', version_id, PaperVersion)
+        sources = sorted((s for s in self.store.records.list('source_record', SourceRecord)
+                          if s.paper_version_id == version_id and (source_ids is None or s.id in source_ids)),
+                         key=lambda s: (s.created_at, s.id))
+        values, origins = {}, {}
+        for name in ('abstract', 'pdf_url'):
+            value = getattr(version, name)
+            origin = next((s for s in sources if s.normalized and getattr(s.normalized, name) == value), None) if value else None
+            if not value:
+                origin = next((s for s in sources if s.normalized and getattr(s.normalized, name)), None)
+                value = getattr(origin.normalized, name) if origin else None
+            values[name] = value
+            if origin or sources:
+                origins[name] = (origin or sources[0]).id
+        return version.model_copy(update=values), origins
+
     def list_project(self, project_id):
         self.projects.get(project_id)
         documents = EvidenceStore(self.db)
         rows = []
         for paper in self.store.associations(project_id):
-            version = self.store.records.get('paper_version', paper.paper_version_id, PaperVersion)
+            version, origins = self.available_metadata(paper.paper_version_id)
             rows.append(dict(paper.model_dump(mode='json'), version=version.model_dump(mode='json'),
+                metadata_sources=origins,
                 documents=[document.model_dump(mode='json', exclude={'abstract'})
                            for document in documents.documents(version.id)]))
         return rows

@@ -142,3 +142,14 @@ async def test_auxiliary_check_can_accept_an_edited_issue_bearing_draft(api, rep
         'verification_record_id': run.pending_action['verification_record_id']}, headers={'Idempotency-Key': 'accept-check'})
     assert response.status_code == 202
     assert response.json()['status'] == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_matrix_edit_rejects_a_changed_paper_version(api, report_context):
+    from backend.scholarflow.persistence.run_store import RunStore
+    reports, version, _, paper = report_context
+    RunStore(reports.db).put_manifest(version.run_id, 'extractions', {'extraction_ids': version.manifest['extraction_ids']}, generation=1)
+    response = await api.patch(f'/api/v1/projects/{version.project_id}/extractions/{paper.paper_id}', json={
+        'expected_revision': 1, 'paper_version_id': 'different-paper-version', 'changes': {'method': 'A correction'}})
+    assert response.status_code == 409
+    assert response.json()['error']['code'] == 'paper_version_changed'

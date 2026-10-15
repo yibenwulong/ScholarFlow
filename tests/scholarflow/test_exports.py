@@ -40,6 +40,47 @@ async def test_three_exports_use_same_saved_version_and_reject_unaccepted_issues
 
 
 @pytest.mark.asyncio
+async def test_exports_preserve_exact_issues_and_search_provenance(report_context, settings):
+    from backend.scholarflow.domain.reports import ReportDraft
+    reports, original, _, _ = report_context
+    draft = ReportDraft.model_validate(original.model_dump(include=set(ReportDraft.model_fields)))
+    draft.manifest = dict(draft.manifest, coverage={'search_results': [{'source': 'openalex', 'query': 'graph fixture', 'count': 2}]})
+    version = reports.save(original.project_id, draft, original.revision)
+    check = await reports.check(version.id)
+    accepted = reports.accept_draft(version.id, check.id)
+    service = ExportService(reports.db, settings)
+    for format in ('markdown', 'docx', 'bibtex'):
+        job = service.request(version.id, format, check.id, accepted.id, 'issues-' + format)
+        artifact = service.build(job.id)
+        content = service.resolve(artifact.storage_key, format).read_bytes()
+        if format == 'docx':
+            with ZipFile(BytesIO(content)) as archive:
+                text = archive.read('word/document.xml').decode()
+        else:
+            text = content.decode()
+        assert 'Verification issues' in text
+        assert 'conflicting' in text and 'Fixture semantic assessment' in text
+        assert version.occurrences[1].id in text
+        assert 'Search provenance' in text and 'openalex' in text and 'graph fixture' in text
+
+
+@pytest.mark.asyncio
+async def test_new_export_rejects_an_old_passing_published_check(api, report_context):
+    from backend.scholarflow.persistence.run_store import RunStore
+    reports, version, _, _ = report_context
+    store = RunStore(reports.db)
+    store.put_manifest(version.run_id, 'report', {'report_version_id': version.id}, generation=1)
+    first = reports._save_check(version, [{'status': 'supported', 'reason': 'Earlier pass'}], 'fixture')
+    store.put_manifest(version.run_id, 'verification', {'verification_record_id': first.id}, generation=1)
+    latest = await reports.check(version.id)
+    store.put_manifest(version.run_id, 'final_report', {'report_version_id': version.id, 'verification_record_id': latest.id}, generation=1)
+    response = await api.post(f'/api/v1/reports/{version.id}/exports', json={
+        'format': 'markdown', 'verification_id': first.id}, headers={'Idempotency-Key': 'old-pass'})
+    assert response.status_code == 409
+    assert response.json()['error']['code'] == 'verification_outdated'
+
+
+@pytest.mark.asyncio
 async def test_export_cannot_reuse_acceptance_for_another_verification(report_context, settings):
     reports, version, _, _ = report_context
     first = await reports.check(version.id)

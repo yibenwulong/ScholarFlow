@@ -1,0 +1,44 @@
+name: ScholarFlow workspace
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      PLAYWRIGHT_PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/nextjs/package-lock.json
+      - name: Install PDF rendering system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b libgdk-pixbuf-2.0-0 libffi-dev
+      - run: pip install -e ".[test,scholarflow]"
+      - run: GPTR_BLOCK_NETWORK=1 python -m pytest tests/scholarflow -q
+      - run: npm ci --no-fund --no-audit
+        working-directory: frontend/nextjs
+      - run: npm run lint && npm exec tsc -- --noEmit && npm run build
+        working-directory: frontend/nextjs
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend/nextjs
+      - run: npm run test:e2e -- --workers=1
+        working-directory: frontend/nextjs
+      - run: SCHOLARFLOW_LIVE_TEST=true npm run test:e2e -- e2e/scholarflow-live.spec.ts --workers=1
+        working-directory: frontend/nextjs

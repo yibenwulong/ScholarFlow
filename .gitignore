@@ -38,6 +38,7 @@ docs/build
 .langgraph-data/
 .next/
 package-lock.json
+!frontend/nextjs/package-lock.json
 
 #Vim swp files
 *.swp
@@ -57,10 +58,13 @@ CURSOR_RULES.md
 # Local isolated implementation workspaces
 /.worktrees/
 /.uv-cache/
+/.npm-cache/
+**/playwright-report/
+**/test-results/
 /.pytest_cache/
 /.tmp-tests/
 /pytest-cache-files-*/
-/data/scholarflow/
+/data/
 
 # Maintainer-local triage notes and editor settings :-)
 /.triage/

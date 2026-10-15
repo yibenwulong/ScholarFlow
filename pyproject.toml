@@ -1,9 +1,12 @@
 [tool.poetry]
 name = "gpt-researcher"
 version = "0.16.0"
-description = "GPT Researcher is an autonomous agent designed for comprehensive online research on a variety of tasks."
+description = "ScholarFlow: evidence-backed multi-agent scientific literature research"
 authors = ["Assaf Elovic <assaf.elovic@gmail.com>"]
-license = "MIT"
+license = "Apache-2.0"
+maintainers = ["yibenwulong"]
+packages = [{ include = "gpt_researcher" }, { include = "backend" }, { include = "multi_agents" }]
+include = ["backend/scholarflow/persistence/migrations/*.sql"]
 readme = "README.md"
 
 [build-system]
@@ -23,9 +26,10 @@ gpt-researcher = { workspace = true }
 [project]
 name = "gpt-researcher"
 version = "0.16.0"
-description = "GPT Researcher is an autonomous agent designed for comprehensive online research on a variety of tasks."
+description = "ScholarFlow: evidence-backed multi-agent scientific literature research"
 authors = [{ name = "Assaf Elovic", email = "assaf.elovic@gmail.com" }]
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
+maintainers = [{ name = "yibenwulong" }]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

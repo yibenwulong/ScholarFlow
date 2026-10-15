@@ -1,12 +1,12 @@
-import type { Metadata } from "next";
-import { Lexend } from "next/font/google";
+import type { Metadata, Viewport } from "next";
+import { GeistSans } from "geist/font/sans";
 import PlausibleProvider from "next-plausible";
 import { GoogleAnalytics } from '@next/third-parties/google'
 import { ResearchHistoryProvider } from "@/hooks/ResearchHistoryContext";
 import "./globals.css";
 import Script from 'next/script';
 
-const inter = Lexend({ subsets: ["latin"] });
+const inter = GeistSans;
 
 let title = "GPT Researcher";
 let description =
@@ -14,6 +14,8 @@ let description =
 let url = "https://github.com/assafelovic/gpt-researcher";
 let ogimage = "/favicon.ico";
 let sitename = "GPT Researcher";
+
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#111827' };
 
 export const metadata: Metadata = {
   metadataBase: new URL(url),
@@ -44,13 +46,6 @@ export const metadata: Metadata = {
     title,
     description,
   },
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 1,
-    userScalable: false,
-  },
-  themeColor: '#111827',
 };
 
 export default function RootLayout({
@@ -62,8 +57,8 @@ export default function RootLayout({
   return (
     <html className="gptr-root" lang="en" suppressHydrationWarning>
       <head>
-        <PlausibleProvider domain="localhost:3000" />
-        <GoogleAnalytics gaId={process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID!} />
+        {process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN && <PlausibleProvider domain={process.env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN} />}
+        {process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID && <GoogleAnalytics gaId={process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID} />}
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <link rel="apple-touch-icon" href="/img/gptr-black-logo.png" />
