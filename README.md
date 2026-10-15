@@ -91,6 +91,10 @@ Instance data defaults to `data/scholarflow`; keep API and worker on the same `S
 
 Text-layer PDFs are supported; scanned PDFs need an external OCR step. Metadata coverage and access differ by source. Exact source identifiers establish paper identity; title similarity alone does not merge papers. Restart recovery reuses committed results, but an interrupted remote request may be repeated and billed before its response was committed. Unknown token usage/prices stay unknown. URL validation includes public-address checks and redirect validation, with a remaining DNS re-resolution/rebinding limitation.
 
+## Project walkthrough and interview guide
+
+The [Chinese interview guide](docs/scholarflow/interview-guide.md) covers the project workflow, résumé examples, module explanations, 24 technical questions, eight engineering retrospectives, source navigation and demo troubleshooting. Download the [PDF](docs/scholarflow/ScholarFlow项目讲解与面试手册.pdf) or [editable Word document](docs/scholarflow/ScholarFlow项目讲解与面试手册.docx). It distinguishes implemented behavior and recorded engineering checks from research quality that has not yet been measured.
+
 ## License and contributions
 
 Apache-2.0, following the upstream root [LICENSE](LICENSE). Upstream authorship and third-party notices are retained; inherited MIT metadata has been aligned with that root license. See [contributing](CONTRIBUTING.md), [security](SECURITY.md), and [upstream attribution](UPSTREAM.md). No PyPI or npm publication is part of this release.

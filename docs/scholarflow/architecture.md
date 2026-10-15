@@ -1,6 +1,6 @@
 # ScholarFlow v0.1 architecture
 
-The Next workspace calls only the same-origin `/api/scholarflow` proxy. It forwards an allowlist of domain paths to server-only `SCHOLARFLOW_API_URL` and preserves status, queries, request IDs, range headers and binary bodies. `/api/v1` is independent of the upstream report/chat/WebSocket contracts.
+The Next workspace calls only the same-origin `/api/scholarflow` proxy. It forwards an allowlist of domain paths to server-only `SCHOLARFLOW_API_URL` and preserves status, queries, idempotency keys, range headers and binary bodies. `/api/v1` is independent of the upstream report/chat/WebSocket contracts.
 
 FastAPI and one separate worker share `SCHOLARFLOW_DATA_DIR`: domain SQLite, checkpoint SQLite, content-addressed documents and exports. SQLite transactions are short; external calls run outside them. The supported deployment is one trusted user and one worker process, with default reader concurrency two. Authentication and public multi-tenant hosting are outside v0.1.
 

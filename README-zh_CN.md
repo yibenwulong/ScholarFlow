@@ -74,4 +74,8 @@ v0.1 面向本地或可信网络的单用户使用，没有公共多用户认证
 
 论文原件、报告、数据库、缓存和密钥不随代码上传；仅在具有分发权时分享原文。停止 API／worker 后备份整个数据目录。
 
+## 项目讲解与面试资料
+
+[项目讲解与面试手册](docs/scholarflow/interview-guide.md) 按项目速通、简历表述、模块讲解、技术问答、源码导读和演示排查组织，包含 24 个技术问答与 8 个工程问题复盘。提供 [PDF 阅读版](docs/scholarflow/ScholarFlow项目讲解与面试手册.pdf) 和 [Word 编辑版](docs/scholarflow/ScholarFlow项目讲解与面试手册.docx)。技术结论与当前代码对应，实测记录和待评价的科研质量分别说明。
+
 完整说明见 [架构与数据边界](docs/scholarflow/architecture.md)、[评估协议](docs/scholarflow/evaluation.md)、[贡献说明](CONTRIBUTING.md)。项目遵循根 [Apache-2.0 LICENSE](LICENSE)，上游归属及继承的许可证元数据差异处理见 [UPSTREAM.md](UPSTREAM.md)。
