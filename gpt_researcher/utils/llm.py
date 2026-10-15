@@ -49,6 +49,8 @@ async def create_chat_completion(
         llm_kwargs: dict[str, Any] | None = None,
         cost_callback: callable = None,
         reasoning_effort: str | None = ReasoningEfforts.Medium.value,
+        max_attempts: int | None = None,
+        usage_callback: callable = None,
         **kwargs
 ) -> str:
     """Create a chat completion using the OpenAI API
@@ -117,7 +119,10 @@ async def create_chat_completion(
     provider = get_llm(llm_provider, **provider_kwargs)
     response = ""
     # create response
-    max_attempts = 1 if (stream and websocket is not None) else 10
+    if max_attempts is None:
+        max_attempts = 1 if (stream and websocket is not None) else 10
+    if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or max_attempts < 1:
+        raise ValueError('max_attempts must be a positive integer')
     last_exception: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -133,6 +138,13 @@ async def create_chat_completion(
                 await asyncio.sleep(min(2 ** (attempt - 1), 8))
                 continue
             break
+
+        # Keep persistence failures outside the provider retry handler. Empty
+        # responses may still have incurred token usage.
+        if usage_callback:
+            usage_callback({'usage': getattr(provider, 'last_usage_metadata', None),
+                            'response_metadata': getattr(provider, 'last_response_metadata', None),
+                            'attempt': attempt})
 
         if not response:
             last_exception = RuntimeError("Empty response from LLM provider")

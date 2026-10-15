@@ -96,6 +96,14 @@ async def lifespan(app: FastAPI):
 # App initialization
 app = FastAPI(lifespan=lifespan)
 
+# ScholarFlow owns an independent domain API; legacy routes/lifespan retain their contracts.
+from backend.scholarflow.api.app import create_router as scholarflow_router, install_error_handlers
+from backend.scholarflow.api.dependencies import ScholarServices
+from backend.scholarflow.config import ScholarSettings
+app.state.scholarflow = ScholarServices.create(ScholarSettings.from_env())
+app.include_router(scholarflow_router(app.state.scholarflow))
+install_error_handlers(app, prefix='/api/v1/')
+
 # Configure allowed origins for CORS
 allowed_origins_env = os.getenv("CORS_ALLOW_ORIGINS")
 ALLOWED_ORIGINS = (

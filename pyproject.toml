@@ -15,7 +15,7 @@ asyncio_mode = "auto"
 addopts = "-v"
 testpaths = ["tests"]
 python_files = "test_*.py"
-asyncio_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.uv.sources]
 gpt-researcher = { workspace = true }
@@ -173,6 +173,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+scholarflow = [
+    "langgraph-checkpoint-sqlite>=3.0,<4.0",
+]
 test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

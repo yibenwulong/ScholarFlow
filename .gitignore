@@ -56,6 +56,11 @@ CURSOR_RULES.md
 
 # Local isolated implementation workspaces
 /.worktrees/
+/.uv-cache/
+/.pytest_cache/
+/.tmp-tests/
+/pytest-cache-files-*/
+/data/scholarflow/
 
 # Maintainer-local triage notes and editor settings :-)
 /.triage/
