@@ -32,14 +32,15 @@ export type ClaimStatus = 'supported' | 'inferred' | 'conflicting' | 'insufficie
 export const claimLabels: Record<ClaimStatus, string> = { supported: '支持', inferred: '推断', conflicting: '冲突', insufficient_evidence: '证据不足', needs_recheck: '待复核' };
 export const fieldLabels = { research_question: '研究问题', method: '方法', dataset: '研究对象或数据集', findings: '主要发现', limitations: '局限' };
 export type FieldName = keyof typeof fieldLabels;
-export interface ExtractedField { value: string | null; claim_ids: string[]; evidence_ids: string[]; review_status: ClaimStatus }
+export interface ExtractedField { value: string | null; claim_ids: string[]; evidence_ids: string[]; review_status: ClaimStatus; missing_reason?: string | null }
 export interface Extraction extends Entity { project_id: string; paper_version_id: string; document_version_ids: string[];
-  fields: Record<FieldName, ExtractedField>; origin: 'ai' | 'human'; previous_id: string | null }
+  fields: Record<FieldName, ExtractedField>; origin: 'ai' | 'human'; previous_id: string | null;
+  coverage?: { reader_version?: string; fragments?: Array<{ source_scope?: string }> } }
 export interface PaperReadingStatus {
   paper_version_id: string; source_run_id: string; source_job_id: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'; extraction_id: string | null;
   error: { code: string; message: string } | null; can_retry: boolean; active_retry_run_id: string | null;
-  retry_block_reason?: string | null;
+  retry_block_reason?: string | null; needs_reread?: boolean;
 }
 export interface Claim extends Entity { run_id: string; text: string; source_scope: 'fulltext' | 'abstract'; status: ClaimStatus }
 export interface Passage extends Entity { document_version_id: string; text: string; page_number: number | null; start: number; end: number }

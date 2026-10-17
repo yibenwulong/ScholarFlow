@@ -44,7 +44,7 @@ export default function ReadingStatusPanel({ projectId, papers, onRefresh }: {
         setItems(result.items); setLoadError('');
         await Promise.all(Object.entries(localRef.current).map(async ([jobId, local]) => {
           const item = result.items.find(row => row.source_job_id === jobId);
-          if (item?.status === 'succeeded' || item?.active_retry_run_id === local.id) {
+          if ((item?.status === 'succeeded' && !item.needs_reread) || item?.active_retry_run_id === local.id) {
             if (localRef.current[jobId]?.id === local.id) remember(jobId);
             return;
           }
@@ -77,28 +77,37 @@ export default function ReadingStatusPanel({ projectId, papers, onRefresh }: {
   }
   const displayed = items.map(item => ({ ...item, status: localRuns[item.source_job_id]
     ? localRuns[item.source_job_id].status === 'running' ? 'running' as const : 'queued' as const : item.status }));
-  const successful = displayed.filter(item => item.status === 'succeeded'), remaining = displayed.filter(item => item.status !== 'succeeded');
+  const supplementJobs = new Set(items.filter(item => item.needs_reread && item.status === 'succeeded').map(item => item.source_job_id));
+  const needsSupplement = (item: PaperReadingStatus) => supplementJobs.has(item.source_job_id);
+  const supplements = displayed.filter(needsSupplement);
+  const successful = displayed.filter(item => item.status === 'succeeded' && !needsSupplement(item));
+  const remaining = displayed.filter(item => item.status !== 'succeeded' && !needsSupplement(item));
   const localStates = Object.values(localRuns);
   const localNotice = localStates.some(run => run.status === 'queued') ? '单篇重试已排队，只补充阅读结果，不会自动生成报告。'
     : localStates.some(run => run.status === 'running') ? '正在重试单篇阅读，只补充阅读结果，不会自动生成报告。'
     : '单篇阅读已完成，正在同步结果。';
   const titleFor = (item: PaperReadingStatus) => papers.find(paper => paper.paper_version_id === item.paper_version_id)?.version.title || item.paper_version_id;
+  function renderReading(item: PaperReadingStatus, supplement = false) {
+    const title = titleFor(item), local = localRuns[item.source_job_id], busy = submitting.includes(item.source_job_id);
+    const actionLabel = supplement ? '补充提取此篇' : '仅重试此篇';
+    return <article key={item.source_job_id} className={item.status === 'failed' ? 'sf-error' : 'sf-notice'}><div className="sf-row"><strong style={{ overflowWrap: 'anywhere' }}>{title}</strong>
+      <span className="sf-badge">{local?.status === 'completed' ? '结果同步中' : supplement && item.status === 'succeeded' ? '待补充提取' : labels[item.status]}</span></div>
+      {item.status === 'failed' && <><p style={{ marginTop: 8 }}>{readingError(item.error)}</p>{item.error && <details style={{ marginTop: 8 }}><summary>错误详情</summary><p className="sf-small" style={{ overflowWrap: 'anywhere' }}>{item.error.message}</p></details>}</>}
+      {!local && (item.status === 'failed' || supplement) && item.retry_block_reason && <p className="sf-small" style={{ marginTop: 8 }}>{blockReason(item.retry_block_reason)}</p>}
+      {(supplement || item.can_retry || local || busy) && <button style={{ marginTop: 12 }} aria-label={actionLabel + ' ' + title} disabled={!item.can_retry || !!local || busy}
+        onClick={() => void retry(item)}>{busy ? '正在提交…' : local ? local.status === 'running' ? '正在提取此篇' : local.status === 'completed' ? '正在同步结果' : '任务已排队' : actionLabel}</button>}
+    </article>;
+  }
   if (!items.length && !loadError && !retryError) return null;
   return <section className="sf-card sf-stack" aria-label="逐篇阅读状态"><div><h2>逐篇阅读状态</h2>
     <p className="sf-muted" style={{ marginTop: 8 }}>成功的阅读结果会先显示在下方矩阵。单篇重试只补充阅读结果，不会自动生成报告。</p></div>
-    <div className="sf-row"><span className="sf-badge sf-green">已成功 {successful.length} 篇</span><span className="sf-badge">失败 {displayed.filter(item => item.status === 'failed').length} 篇</span>
+    <div className="sf-row"><span className="sf-badge sf-green">已成功 {displayed.filter(item => item.status === 'succeeded').length} 篇</span><span className="sf-badge">失败 {displayed.filter(item => item.status === 'failed').length} 篇</span>
       {displayed.some(item => ['queued', 'running'].includes(item.status)) && <span className="sf-badge">处理中 {displayed.filter(item => ['queued', 'running'].includes(item.status)).length} 篇</span>}</div>
     {loadError && <p role="alert" className="sf-error">{loadError}</p>}{retryError && <p role="alert" className="sf-error">{retryError}</p>}
     {localStates.length > 0 && <p role="status" className="sf-notice">{localNotice}</p>}
-    {remaining.map(item => { const title = titleFor(item), local = localRuns[item.source_job_id], busy = submitting.includes(item.source_job_id);
-      return <article key={item.source_job_id} className={item.status === 'failed' ? 'sf-error' : 'sf-notice'}><div className="sf-row"><strong style={{ overflowWrap: 'anywhere' }}>{title}</strong>
-        <span className="sf-badge">{local?.status === 'completed' ? '结果同步中' : labels[item.status]}</span></div>
-        {item.status === 'failed' && <><p style={{ marginTop: 8 }}>{readingError(item.error)}</p>{item.error && <details style={{ marginTop: 8 }}><summary>错误详情</summary><p className="sf-small" style={{ overflowWrap: 'anywhere' }}>{item.error.message}</p></details>}</>}
-        {!local && item.status === 'failed' && item.retry_block_reason && <p className="sf-small" style={{ marginTop: 8 }}>{blockReason(item.retry_block_reason)}</p>}
-        {(item.can_retry || local || busy) && <button style={{ marginTop: 12 }} aria-label={'仅重试此篇 ' + title} disabled={!item.can_retry || !!local || busy}
-          onClick={() => void retry(item)}>{busy ? '正在提交…' : local ? local.status === 'running' ? '正在重试此篇' : local.status === 'completed' ? '正在同步结果' : '重试已排队' : '仅重试此篇'}</button>}
-      </article>;
-    })}
+    {remaining.map(item => renderReading(item))}
+    {supplements.length > 0 && <details><summary>待补充提取（{supplements.length}）</summary><p className="sf-muted sf-small" style={{ marginTop: 10 }}>旧版结果可能尚未完整提取，可逐篇补充。现有矩阵内容会保留到新结果完成；补读不会自动生成报告。</p>
+      <div className="sf-stack" style={{ marginTop: 12 }}>{supplements.map(item => renderReading(item, true))}</div></details>}
     {successful.length > 0 && <details><summary>已完成论文（{successful.length}）</summary><ul style={{ marginTop: 10 }}>{successful.map(item => <li key={item.source_job_id} style={{ overflowWrap: 'anywhere' }}>{titleFor(item)}</li>)}</ul></details>}
   </section>;
 }

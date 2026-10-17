@@ -33,9 +33,15 @@ class FakeModel:
             return ModelResponse(text=self.output)
         inputs = json.loads(request.messages[-1]['content'])
         fragment = inputs['passages'][0]
-        return ModelResponse(text=json.dumps({'fields': {'method': [{
-            'value': 'The method uses a graph.', 'quote': 'The method uses a graph.',
-            'passage_id': fragment['passage_id']}]}}))
+        text = 'The method uses a graph.' if 'The method uses a graph.' in fragment['text'] else fragment['text']
+        return ModelResponse(text=json.dumps(reader_result({'method': [{
+            'value': text, 'quote': text, 'passage_id': fragment['passage_id']}]})))
+
+
+def reader_result(values):
+    fields = {name: values.get(name, []) for name in ('research_question', 'method', 'dataset', 'findings', 'limitations')}
+    return {'fields': fields, 'missing_reasons': {name: 'Not stated in this fixture fragment.'
+                                               for name, items in fields.items() if not items}}
 
 
 @pytest.mark.asyncio
@@ -65,8 +71,8 @@ async def test_invalid_json_is_explicit_and_fabricated_evidence_remains_unverifi
         await service.extract(run.id, paper.paper_version_id, [document.id])
     assert error.value.code == 'invalid_model_output'
     passage = documents.store.passages(document.id)[0]
-    service.gateway = FakeModel(json.dumps({'fields': {'findings': [{
-        'value': 'Accuracy was 99 percent.', 'quote': 'Accuracy was 99 percent.', 'passage_id': passage.id}]}}))
+    service.gateway = FakeModel(json.dumps(reader_result({'findings': [{
+        'value': 'Accuracy was 99 percent.', 'quote': 'Accuracy was 99 percent.', 'passage_id': passage.id}]})))
     result = await service.extract(run.id, paper.paper_version_id, [document.id])
     assert result.fields['findings'].review_status == 'insufficient_evidence'
 
@@ -74,7 +80,7 @@ async def test_invalid_json_is_explicit_and_fabricated_evidence_remains_unverifi
 @pytest.mark.asyncio
 async def test_all_source_fragments_are_covered_without_silent_truncation(extraction_context):
     documents, run, paper, document = extraction_context
-    model = FakeModel('{"fields": {}}')
+    model = FakeModel()
     service = ExtractionService(documents.db, model, batch_chars=16)
     result = await service.extract(run.id, paper.paper_version_id, [document.id])
     fragments = result.coverage['fragments']

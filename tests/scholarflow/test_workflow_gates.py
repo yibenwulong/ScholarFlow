@@ -11,6 +11,7 @@ from backend.scholarflow.services.model_gateway import ModelResponse
 from backend.scholarflow.services.providers.base import SearchResult
 from backend.scholarflow.workflows.graph import WorkflowRuntime
 from backend.scholarflow.worker.runner import Worker
+from .test_extractions import reader_result
 
 
 class ResearchModel:
@@ -26,7 +27,7 @@ class ResearchModel:
             output = {'recommendations': [{'paper_version_id': p['id'], 'decision': 'included', 'reason': 'Relevant abstract'} for p in inputs['papers']]}
         elif request.purpose == 'read_paper':
             passage = inputs['passages'][0]
-            output = {'fields': {'method': [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.', 'passage_id': passage['passage_id']}]}}
+            output = reader_result({'method': [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.', 'passage_id': passage['passage_id']}]})
         elif request.purpose == 'write_report':
             entry = inputs['extractions'][0]
             field = entry['fields']['method']

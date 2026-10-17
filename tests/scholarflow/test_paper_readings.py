@@ -34,8 +34,10 @@ class Reader:
         if self.on_complete:
             self.on_complete()
         fragment = json.loads(request.messages[-1]['content'])['passages'][0]
-        return ModelResponse(text=json.dumps({'fields': {'method': [{
-            'value': fragment['text'], 'quote': fragment['text'], 'passage_id': fragment['passage_id']}]}}))
+        fields = {name: [] for name in ('research_question', 'method', 'dataset', 'findings', 'limitations')}
+        fields['method'] = [{'value': fragment['text'], 'quote': fragment['text'], 'passage_id': fragment['passage_id']}]
+        return ModelResponse(text=json.dumps({'fields': fields, 'missing_reasons': {
+            name: 'This source does not state this information.' for name in fields if name != 'method'}}))
 
 
 def make_run(context, **changes):
@@ -52,7 +54,7 @@ def make_run(context, **changes):
 def make_job(context, run, index, stage='read_paper'):
     manifest = {'paper_version_id': context.papers[index].paper_version_id,
                 'document_ids': [context.documents[index].id], 'snapshot': run.request_snapshot,
-                '_project_id': run.project_id}
+                '_project_id': run.project_id, 'reader_version': 'reader-v2'}
     return context.services.runs.store.enqueue(run.id, 'artifact', stage, manifest, fingerprint(manifest))
 
 
@@ -416,7 +418,10 @@ async def test_human_revision_created_while_retry_is_queued_prevents_dispatch(ap
 @pytest.mark.asyncio
 async def test_human_revision_created_during_model_call_keeps_ai_output_unpublished(api, reading_context):
     c = reading_context
-    newer = make_run(c)
+    # A prior reading by another model provides the editable revision without
+    # satisfying this retry's new batch cache and skipping the concurrent call.
+    newer = make_run(c, request_snapshot=dict(c.snapshot,
+        model=dict(c.snapshot['model'], model='another-reader')))
     extraction = await c.services.extractions.extract(newer.id, c.papers[1].paper_version_id, [c.documents[1].id])
     c.services.runs.store.put_manifest(newer.id, 'extractions', {'extraction_ids': [extraction.id]}, generation=1)
     response = await retry(api, c)

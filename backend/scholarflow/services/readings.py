@@ -11,6 +11,12 @@ from ..domain.runs import Run
 from ..persistence.projections import Published, reading_extraction
 from ..persistence.run_store import RunStore, fingerprint, parse_job
 from .model_gateway import ModelConfig
+from .reader_contract import READER_VERSION, reader_inputs
+
+
+def needs_reread(extraction):
+    return (extraction is not None and extraction.origin == 'ai'
+            and extraction.coverage.get('reader_version') != READER_VERSION)
 
 
 class ReadingService:
@@ -59,8 +65,8 @@ class ReadingService:
             raise ScholarError(409, 'invalid_reading_inputs', 'The original Reader inputs are incomplete')
         return source, deepcopy(inputs)
 
-    def _block_reason(self, project_id, job, conn):
-        if job.status != 'failed':
+    def _block_reason(self, project_id, job, conn, *, allow_saved=False):
+        if job.status not in {'failed', 'succeeded'}:
             return 'Only a failed Reader task can be retried'
         try:
             _, inputs = self._frozen_inputs(project_id, job, conn)
@@ -76,6 +82,8 @@ class ReadingService:
             visible = Published(self.db).extractions(project_id, conn).get(paper.id)
             if visible is not None and visible.origin == 'human':
                 return 'A human extraction revision must be preserved'
+            if job.status == 'succeeded' and not needs_reread(visible) and not allow_saved:
+                return 'This paper has already been read successfully'
         except (ScholarError, ValidationError):
             return 'The original Reader inputs are no longer available'
         return None
@@ -83,6 +91,7 @@ class ReadingService:
     def status(self, project_id):
         with self.db.transaction(write=False) as conn:
             self.records.get('project', project_id, Project, conn)
+            published = Published(self.db).extractions(project_id, conn)
             latest, items = set(), []
             for job in self._original_jobs(project_id, conn):
                 paper_id = job.input_manifest.get('paper_version_id')
@@ -106,17 +115,19 @@ class ReadingService:
                             if (result := reading_extraction(self.records, project_id, parse_job(row), conn))
                             and result.id in extraction_ids), None)
                 reason = self._block_reason(project_id, job, conn)
+                incomplete = needs_reread(published.get(paper_id))
                 if active:
                     reason = 'A retry is already queued or running'
-                elif state == 'succeeded':
+                elif state == 'succeeded' and not incomplete:
                     reason = 'This paper has already been read successfully'
-                elif child is not None and child.status != 'failed':
+                elif child is not None and child.status != 'failed' and not (child.status == 'completed' and incomplete):
                     reason = 'The latest retry has not failed'
                 items.append({'paper_version_id': paper_id, 'source_run_id': job.run_id, 'source_job_id': job.id,
                     'status': state, 'extraction_id': extraction.id if extraction else None,
                     'error': {'code': error.get('code', 'operation_failed'), 'message': error.get('message', 'Reader failed')}
                              if isinstance(error, dict) else None,
                     'can_retry': reason is None, 'active_retry_run_id': active.id if active else None,
+                    'needs_reread': incomplete,
                     'retry_block_reason': reason})
             return {'items': items}
 
@@ -132,10 +143,22 @@ class ReadingService:
             if (reading.get('source_job_id') != job.id or reading.get('input_hash') != job.input_hash
                     or reading.get('input_manifest') != inputs or run.request_snapshot != inputs['snapshot']):
                 raise ScholarError(409, 'invalid_reading_inputs', 'The frozen Reader inputs do not match their source')
-            reason = self._block_reason(run.project_id, job, conn)
+            effective = reader_inputs(inputs)
+            saved = False
+            for row in conn.execute("SELECT * FROM jobs WHERE run_id=? AND kind='artifact' "
+                                    "AND stage='read_paper' AND status='succeeded'", (run.id,)):
+                own_job = parse_job(row)
+                extraction = reading_extraction(self.records, run.project_id, own_job, conn)
+                if (own_job.input_hash == fingerprint(effective) and extraction is not None
+                        and extraction.coverage.get('reader_version') == READER_VERSION):
+                    saved = True
+                    break
+            reason = self._block_reason(run.project_id, job, conn, allow_saved=saved)
             if reason:
                 raise ScholarError(409, 'reading_retry_blocked', reason)
-            return inputs
+            if reading.get('reader_version', READER_VERSION) != READER_VERSION:
+                raise ScholarError(409, 'reader_version_changed', 'Create a new reading with the current extraction version')
+            return effective
 
     def retry(self, project_id, source_job_id, operation_key):
         scope, digest = f'paper_read_retry:{project_id}', fingerprint({'source_job_id': source_job_id})
@@ -155,16 +178,18 @@ class ReadingService:
             if reason:
                 raise ScholarError(409, 'reading_retry_blocked', reason)
             retries = self._retries(project_id, source_job_id, conn)
-            reusable = next((run for run in retries if run.status in {'queued', 'running', 'completed'}), None)
+            reusable = next((run for run in retries if run.status in {'queued', 'running'} or (
+                run.status == 'completed' and run.manifests.get('reading', {}).get('reader_version') == READER_VERSION)), None)
             if reusable is not None:
                 run = reusable
             else:
-                if retries and retries[0].status != 'failed':
+                if retries and retries[0].status != 'failed' and not (
+                    retries[0].status == 'completed' and retries[0].manifests.get('reading', {}).get('reader_version') != READER_VERSION):
                     raise ScholarError(409, 'reading_retry_blocked', 'The latest paper retry has not failed')
                 run = Run(project_id=project_id, kind='paper_read', target_id=source_job_id,
                     start_at='analyze', stage='read_paper', request_snapshot=deepcopy(inputs['snapshot']),
                     manifests={'reading': {'source_run_id': source.id, 'source_job_id': job.id,
-                        'input_hash': job.input_hash, 'input_manifest': inputs}})
+                        'input_hash': job.input_hash, 'input_manifest': inputs, 'reader_version': READER_VERSION}})
                 self.records.insert('run', run, project_id=project_id,
                                     links=[('project', project_id), ('source_run', source.id)], conn=conn)
                 self.store.enqueue(run.id, 'driver', 'paper_read', {'operation_revision': 0}, operation_key, conn)

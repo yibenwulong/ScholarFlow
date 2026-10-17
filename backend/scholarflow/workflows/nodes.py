@@ -12,6 +12,7 @@ from ..domain.projects import PlanDraft, PlanRevision
 from ..domain.reports import VerificationRecord
 from ..services.downloads import download_pdf
 from ..services.model_gateway import ModelRequest
+from ..services.reader_contract import reader_inputs
 from ..services.providers.arxiv import ArxivProvider
 from ..services.providers.openalex import OpenAlexProvider
 from ..services.providers.semantic_scholar import SemanticScholarProvider
@@ -243,8 +244,8 @@ class ResearchNodes:
                 result = await self.s.extractions.extract(run.id, entry['paper_version_id'], entry['document_version_ids'])
                 return {'extraction_id': result.id}
             try:
-                return await self.artifact(state, 'read_paper', {'paper_version_id': entry['paper_version_id'],
-                    'document_ids': entry['document_version_ids'], 'snapshot': run.request_snapshot}, operation)
+                return await self.artifact(state, 'read_paper', reader_inputs({'paper_version_id': entry['paper_version_id'],
+                    'document_ids': entry['document_version_ids'], 'snapshot': run.request_snapshot}), operation)
             except ScholarError as error:
                 if error.code in {'lease_lost', 'run_cancelled', 'model_budget_exhausted', 'task_busy'}:
                     raise

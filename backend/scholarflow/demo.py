@@ -44,8 +44,12 @@ class DemoModel:
                 'reason': 'Synthetic fixture relevant to the demonstration; human confirmation required'} for paper in inputs['papers']]}
         elif request.purpose == 'read_paper':
             passage = next((p for p in inputs['passages'] if 'The method uses a graph.' in p['text']), None)
-            output = {'fields': {'method': [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.',
-                       'passage_id': passage['passage_id']}]}} if passage else {'fields': {}}
+            fields = {name: [] for name in ('research_question', 'method', 'dataset', 'findings', 'limitations')}
+            if passage:
+                fields['method'] = [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.',
+                                     'passage_id': passage['passage_id']}]
+            output = {'fields': fields, 'missing_reasons': {name: 'Not stated in this synthetic fixture fragment.'
+                                                           for name, values in fields.items() if not values}}
         elif request.purpose == 'write_report':
             blocks = []
             for index, entry in enumerate(inputs['extractions']):

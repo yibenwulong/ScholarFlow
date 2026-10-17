@@ -49,6 +49,7 @@ class Evidence(Entity):
 
 class ExtractedField(Model):
     value: str | None = None
+    missing_reason: str | None = None
     claim_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     review_status: ClaimStatus = 'needs_recheck'
@@ -63,3 +64,23 @@ class ExtractionRevision(Entity):
     origin: Literal['ai', 'human'] = 'ai'
     previous_id: str | None = None
     coverage: dict = Field(default_factory=dict)
+
+
+class ReaderOutputDiagnostic(Model):
+    loc: list[str | int]
+    type: str
+
+
+class ReaderOutputAudit(Entity):
+    project_id: str
+    run_id: str
+    paper_version_id: str
+    document_version_ids: list[str]
+    input_hash: str
+    reader_version: str = 'reader-v2'
+    raw_text: str
+    sha256: str
+    provider_request_id: str | None = None
+    usage: dict | None = None
+    output_format: Literal['json', 'json_fence']
+    diagnostics: list[ReaderOutputDiagnostic] = Field(default_factory=list)
