@@ -22,8 +22,8 @@ FIELDS = ('research_question', 'method', 'dataset', 'findings', 'limitations')
 def payload(inputs, *, empty=False):
     fields = {name: [] for name in FIELDS}
     if not empty:
-        fragment = inputs['passages'][0]
-        fields['method'] = [{'value': 'A graph method', 'passage_id': fragment['passage_id'], 'quote': fragment['text']}]
+        unit = inputs['passages'][0]['quote_units'][0]
+        fields['method'] = [{'value': 'A graph method', 'quote_ids': [unit['quote_id']]}]
     return {'fields': fields, 'missing_reasons': {name: 'Not stated in the supplied fragment.'
                                                 for name in FIELDS if not fields[name]}}
 
@@ -55,6 +55,93 @@ def audit_rows(service):
             "SELECT payload FROM entities WHERE kind='reader_output_audit' ORDER BY created_at,id")]
 
 
+def anchored_payload(quote_ids):
+    fields = {name: [] for name in FIELDS}
+    fields['method'] = [{'value': 'A graph method', 'quote_ids': quote_ids, 'relation': 'supports'}]
+    return {'fields': fields, 'missing_reasons': {name: 'Not stated in this fragment.'
+                                                for name in FIELDS if not fields[name]}}
+
+
+@pytest.mark.asyncio
+async def test_reader_anchor_payload_covers_source_once_and_persists_independent_exact_spans(extraction_context):
+    documents, run, paper, original = extraction_context
+    text = 'First exact sentence. ' + ('Middle material. ' * 45) + 'Final exact sentence.'
+    document = documents.import_abstract(paper.paper_version_id, text, original.source_record_id)
+    documents.parse(document.id)
+    observed = []
+    def output(inputs):
+        observed.append(inputs)
+        fragment, = inputs['passages']
+        assert 'text' not in fragment
+        units = fragment['quote_units']
+        assert len(units) >= 3
+        assert ''.join(unit['text'] for unit in units) == text
+        assert all(set(unit) == {'quote_id', 'text'} for unit in units)
+        return anchored_payload([units[0]['quote_id'], units[-1]['quote_id']])
+    model = Reader([output])
+    service = ExtractionService(documents.db, model)
+    extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
+    field = extraction.fields['method']
+    assert len(field.claim_ids) == 1 and len(field.evidence_ids) == 2
+    passage, = documents.store.passages(document.id)
+    evidence = [service.records.get('evidence', item, Evidence) for item in field.evidence_ids]
+    assert all(passage.text[item.quote_start:item.quote_end] == item.quote for item in evidence)
+    assert [item.quote for item in evidence] == [observed[0]['passages'][0]['quote_units'][index]['text']
+                                               for index in (0, -1)]
+    assert all(item.locator_status == 'located' for item in evidence)
+    assert field.review_status == 'needs_recheck'
+    batch_job, = [job for job in service.runs.list_jobs(run.id) if job.stage == 'read_paper_batch']
+    descriptors = batch_job.input_manifest['quote_units']
+    assert len(descriptors) == len(observed[0]['passages'][0]['quote_units'])
+    assert all('text' not in item and item['sha256'] == hashlib.sha256(
+        passage.text[item['start']:item['end']].encode()).hexdigest() for item in descriptors)
+
+
+@pytest.mark.asyncio
+async def test_reader_unknown_quote_id_is_audited_without_publishing(extraction_context):
+    service, run, paper, document = context_service(extraction_context,
+        Reader([anchored_payload(['Sensitive-invented-quote-marker'])]))
+    with pytest.raises(ScholarError) as failure:
+        await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert failure.value.code == 'unknown_quote_id'
+    assert failure.value.retryable is False
+    audit, = audit_rows(service)
+    assert audit['diagnostics'] == [{'loc': ['fields', 'method', 0, 'quote_ids', 0], 'type': 'unknown_quote_id'}]
+    assert 'Sensitive-' not in str(failure.value.details)
+    assert service.latest(run.project_id, paper.paper_version_id) is None
+    assert not any(job.status == 'succeeded' for job in service.runs.list_jobs(run.id))
+
+
+@pytest.mark.asyncio
+async def test_reader_claim_across_two_sources_keeps_both_spans_separate(extraction_context):
+    documents, run, paper, first = extraction_context
+    second = documents.import_abstract(paper.paper_version_id, 'A separate source describes the evaluation.', first.source_record_id)
+    documents.parse(second.id)
+    def output(inputs):
+        return anchored_payload([fragment['quote_units'][0]['quote_id'] for fragment in inputs['passages']])
+    service = ExtractionService(documents.db, Reader([output]))
+    extraction = await service.extract(run.id, paper.paper_version_id, [first.id, second.id])
+    field = extraction.fields['method']
+    assert len(field.claim_ids) == 1 and len(field.evidence_ids) == 2
+    items = [service.records.get('evidence', item, Evidence) for item in field.evidence_ids]
+    sources = {passage.id: passage for document in (first, second) for passage in documents.store.passages(document.id)}
+    assert len({item.passage_id for item in items}) == 2
+    assert all(item.quote == sources[item.passage_id].text[item.quote_start:item.quote_end] for item in items)
+    assert all(item.quote != first.abstract + second.abstract for item in items)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('ids', [[], ['Q0001', 'Q0001'], ['Q0001'] * 5])
+async def test_reader_rejects_empty_duplicate_or_excessive_anchor_lists(extraction_context, ids):
+    service, run, paper, document = context_service(extraction_context, Reader([anchored_payload(ids)]))
+    with pytest.raises(ScholarError) as failure:
+        await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert failure.value.code == 'invalid_model_output'
+    audit, = audit_rows(service)
+    assert all(item['loc'][:4] == ['fields', 'method', 0, 'quote_ids'] for item in audit['diagnostics'])
+    assert service.latest(run.project_id, paper.paper_version_id) is None
+
+
 @pytest.mark.asyncio
 async def test_reader_model_sees_paper_title_language_and_fragments_without_project_topic(extraction_context):
     documents, run, paper, document = extraction_context
@@ -69,7 +156,8 @@ async def test_reader_model_sees_paper_title_language_and_fragments_without_proj
     await service.extract(run.id, paper.paper_version_id, [document.id])
     assert set(observed[0]) == {'paper_title', 'language', 'passages'}
     assert observed[0]['paper_title'] == 'Synthetic paper'
-    assert observed[0]['passages'][0]['text'] == document.abstract
+    assert ''.join(unit['text'] for unit in observed[0]['passages'][0]['quote_units']) == document.abstract
+    assert 'text' not in observed[0]['passages'][0]
     assert 'Sensitive-project-topic-marker' not in json.dumps(model.requests[0].messages)
 
 
@@ -83,7 +171,7 @@ async def test_unrelated_project_topic_does_not_turn_paper_metric_batch_into_emp
         result = payload(inputs, empty=True)
         if 'question' not in inputs:
             result['fields']['findings'] = [{'value': 'F1 0.6500 on setting A; F1 0.3824 on setting B.',
-                'passage_id': inputs['passages'][0]['passage_id'], 'quote': inputs['passages'][0]['text']}]
+                'quote_ids': [inputs['passages'][0]['quote_units'][0]['quote_id']]}]
             del result['missing_reasons']['findings']
         return result
     service = ExtractionService(documents.db, Reader([output]))
@@ -139,7 +227,7 @@ async def test_reader_accepts_complete_json_and_records_exact_immutable_audit(ex
         return raw
     service, run, paper, document = context_service(extraction_context, Reader([output]))
     extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
-    assert extraction.coverage['reader_version'] == 'reader-v3'
+    assert extraction.coverage['reader_version'] == 'reader-v4'
     assert extraction.fields['method'].value == 'A graph method'
     assert extraction.fields['method'].missing_reason is None
     assert extraction.fields['dataset'].value is None
@@ -176,43 +264,33 @@ async def test_reader_invalid_response_has_safe_schema_diagnostics_and_raw_audit
 
 
 @pytest.mark.asyncio
-async def test_reader_unknown_passage_is_rejected_without_rewriting_source_ids(extraction_context):
+async def test_reader_passage_id_cannot_be_used_as_quote_id(extraction_context):
     def output(inputs):
         result = payload(inputs)
-        result['fields']['method'][0]['passage_id'] = 'not-a-supplied-passage'
+        result['fields']['method'][0]['quote_ids'] = [inputs['passages'][0]['passage_id']]
         return result
     service, run, paper, document = context_service(extraction_context, Reader([output]))
     with pytest.raises(ScholarError) as failure:
         await service.extract(run.id, paper.paper_version_id, [document.id])
-    assert failure.value.code == 'unknown_passage'
+    assert failure.value.code == 'unknown_quote_id'
     assert failure.value.details['reader_output_audit_id'] == audit_rows(service)[0]['id']
     assert service.latest(run.project_id, paper.paper_version_id) is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('invalid', ['ellipsis', 'ascii_ellipsis', 'reordered', 'cross_fragment'])
-async def test_reader_rejects_noncontinuous_quotes_before_publishing_a_batch(extraction_context, invalid):
+@pytest.mark.parametrize('forbidden_key', ['quote', 'passage_id', 'start', 'end'])
+async def test_reader_rejects_model_written_quotes_and_locations_before_publishing(extraction_context, forbidden_key):
     documents, run, paper, document = extraction_context
-    document_ids = [document.id]
-    if invalid == 'cross_fragment':
-        extra = documents.import_abstract(paper.paper_version_id, 'The second page contains limitations.', document.source_record_id)
-        documents.parse(extra.id)
-        document_ids.append(extra.id)
     def output(inputs):
         result = payload(inputs)
-        quote = {'ellipsis': 'The method… Accuracy was 84 percent.',
-                 'ascii_ellipsis': 'The method ... Accuracy was 84 percent.',
-                 'reordered': 'Accuracy was 84 percent. The method uses a graph.'}.get(invalid)
-        if invalid == 'cross_fragment':
-            quote = ' '.join(fragment['text'] for fragment in inputs['passages'])
-        result['fields']['method'][0]['quote'] = quote
+        result['fields']['method'][0][forbidden_key] = 'Sensitive-model-written-source-marker'
         return result
     model = Reader([output])
     service = ExtractionService(documents.db, model)
     with pytest.raises(ScholarError) as failure:
-        await service.extract(run.id, paper.paper_version_id, document_ids)
-    assert failure.value.code == 'invalid_reader_quote' and failure.value.retryable is False
-    assert failure.value.details['diagnostics'] == [{'loc': ['fields', 'method', 0, 'quote'], 'type': 'quote_not_contiguous'}]
+        await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert failure.value.code == 'invalid_model_output' and failure.value.retryable is False
+    assert failure.value.details['diagnostics'] == [{'loc': ['fields', 'method', 0, '<extra_field>'], 'type': 'extra_forbidden'}]
     assert service.latest(run.project_id, paper.paper_version_id) is None
     batch, = [job for job in service.runs.list_jobs(run.id) if job.stage == 'read_paper_batch']
     assert batch.status == 'failed' and batch.attempt_no == 1 and len(model.requests) == 1
@@ -220,18 +298,16 @@ async def test_reader_rejects_noncontinuous_quotes_before_publishing_a_batch(ext
 
 
 @pytest.mark.asyncio
-async def test_literal_source_ellipsis_and_safe_whitespace_normalization_remain_valid(extraction_context):
+async def test_literal_ellipsis_and_hyphenated_whitespace_are_preserved_without_rewriting(extraction_context):
     documents, run, paper, original = extraction_context
-    document = documents.import_abstract(paper.paper_version_id, 'An inter-\nvention uses ... a graph.', original.source_record_id)
+    source = 'An inter-\nvention uses ... a graph.'
+    document = documents.import_abstract(paper.paper_version_id, source, original.source_record_id)
     documents.parse(document.id)
-    def output(inputs):
-        result = payload(inputs)
-        result['fields']['method'][0]['quote'] = 'An intervention uses ... a graph.'
-        return result
-    service = ExtractionService(documents.db, Reader([output]))
+    service = ExtractionService(documents.db, Reader())
     extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
     evidence = service.records.get('evidence', extraction.fields['method'].evidence_ids[0], Evidence)
     assert evidence.locator_status == 'located' and evidence.quote_start == 0
+    assert evidence.quote == source and evidence.quote_end == len(source)
 
 
 @pytest.mark.asyncio
@@ -248,12 +324,12 @@ async def test_successful_batches_survive_later_failure_and_cross_run_retry_only
     extraction = await service.extract(retry_run.id, paper.paper_version_id, [document.id])
     starts = [json.loads(request.messages[-1]['content'])['passages'][0]['start'] for request in model.requests]
     assert starts == [0, 16, 16, 32, 48]
-    assert extraction.coverage['complete'] is True and extraction.coverage['reader_version'] == 'reader-v3'
+    assert extraction.coverage['complete'] is True and extraction.coverage['reader_version'] == 'reader-v4'
     assert len(audit_rows(service)) == 5
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('invalid', ['project', 'documents', 'fragment_hash', 'output_schema'])
+@pytest.mark.parametrize('invalid', ['project', 'documents', 'fragment_hash', 'unit_map_hash', 'output_schema'])
 async def test_batch_cache_requires_matching_provenance_and_valid_output(extraction_context, invalid):
     from backend.scholarflow.domain.evidence import ReaderOutputAudit
     from uuid import uuid4
@@ -262,11 +338,12 @@ async def test_batch_cache_requires_matching_provenance_and_valid_output(extract
     extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
     batch, = [job for job in service.runs.list_jobs(run.id) if job.stage == 'read_paper_batch']
     audit = service.records.get('reader_output_audit', batch.result['reader_output_audit_id'], ReaderOutputAudit)
-    if invalid == 'fragment_hash':
+    if invalid in {'fragment_hash', 'unit_map_hash'}:
         with service.db.transaction() as conn:
             row = conn.execute('SELECT payload FROM jobs WHERE id=?', (batch.id,)).fetchone()
             value = json.loads(row['payload'])
-            value['manifest']['fragments'][0]['sha256'] = 'different-fragment-hash'
+            key = 'fragments' if invalid == 'fragment_hash' else 'quote_units'
+            value['manifest'][key][0]['sha256'] = 'different-source-hash'
             conn.execute('UPDATE jobs SET payload=? WHERE id=?', (json.dumps(value), batch.id))
     else:
         changes = {'id': str(uuid4())}
@@ -382,8 +459,7 @@ async def test_repeated_quote_in_later_chunk_is_located_within_that_fragment(ext
     def output(inputs):
         result = payload(inputs, empty=True)
         if inputs['passages'][0]['start'] == 20:
-            result['fields']['method'] = [{'value': 'Repeated method', 'quote': 'repeat phrase',
-                                         'passage_id': inputs['passages'][0]['passage_id']}]
+            result['fields']['method'] = [{'value': 'Repeated method', 'quote_ids': [inputs['passages'][0]['quote_units'][0]['quote_id']]}]
             del result['missing_reasons']['method']
         return result
     service = ExtractionService(documents.db, Reader([output, output]), batch_chars=20)

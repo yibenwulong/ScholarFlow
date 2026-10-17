@@ -35,7 +35,8 @@ class Reader:
             self.on_complete()
         fragment = json.loads(request.messages[-1]['content'])['passages'][0]
         fields = {name: [] for name in ('research_question', 'method', 'dataset', 'findings', 'limitations')}
-        fields['method'] = [{'value': fragment['text'], 'quote': fragment['text'], 'passage_id': fragment['passage_id']}]
+        unit = fragment['quote_units'][0]
+        fields['method'] = [{'value': unit['text'], 'quote_ids': [unit['quote_id']]}]
         return ModelResponse(text=json.dumps({'fields': fields, 'missing_reasons': {
             name: 'This source does not state this information.' for name in fields if name != 'method'}}))
 
@@ -54,7 +55,7 @@ def make_run(context, **changes):
 def make_job(context, run, index, stage='read_paper'):
     manifest = {'paper_version_id': context.papers[index].paper_version_id,
                 'document_ids': [context.documents[index].id], 'snapshot': run.request_snapshot,
-                '_project_id': run.project_id, 'reader_version': 'reader-v3'}
+                '_project_id': run.project_id, 'reader_version': 'reader-v4'}
     return context.services.runs.store.enqueue(run.id, 'artifact', stage, manifest, fingerprint(manifest))
 
 

@@ -43,11 +43,11 @@ class DemoModel:
             output = {'recommendations': [{'paper_version_id': paper['id'], 'decision': 'included',
                 'reason': 'Synthetic fixture relevant to the demonstration; human confirmation required'} for paper in inputs['papers']]}
         elif request.purpose == 'read_paper':
-            passage = next((p for p in inputs['passages'] if 'The method uses a graph.' in p['text']), None)
+            unit = next((unit for passage in inputs['passages'] for unit in passage['quote_units']
+                         if 'The method uses a graph.' in unit['text']), None)
             fields = {name: [] for name in ('research_question', 'method', 'dataset', 'findings', 'limitations')}
-            if passage:
-                fields['method'] = [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.',
-                                     'passage_id': passage['passage_id']}]
+            if unit:
+                fields['method'] = [{'value': 'The method uses a graph.', 'quote_ids': [unit['quote_id']]}]
             output = {'fields': fields, 'missing_reasons': {name: 'Not stated in this synthetic fixture fragment.'
                                                            for name, values in fields.items() if not values}}
         elif request.purpose == 'write_report':

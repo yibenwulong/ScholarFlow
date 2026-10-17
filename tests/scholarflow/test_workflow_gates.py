@@ -27,7 +27,7 @@ class ResearchModel:
             output = {'recommendations': [{'paper_version_id': p['id'], 'decision': 'included', 'reason': 'Relevant abstract'} for p in inputs['papers']]}
         elif request.purpose == 'read_paper':
             passage = inputs['passages'][0]
-            output = reader_result({'method': [{'value': 'The method uses a graph.', 'quote': 'The method uses a graph.', 'passage_id': passage['passage_id']}]})
+            output = reader_result({'method': [{'value': 'The method uses a graph.', 'quote_ids': [passage['quote_units'][0]['quote_id']]}]})
         elif request.purpose == 'write_report':
             entry = inputs['extractions'][0]
             field = entry['fields']['method']

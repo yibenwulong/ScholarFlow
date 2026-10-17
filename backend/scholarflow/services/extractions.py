@@ -1,7 +1,6 @@
 import hashlib
 import json
 import re
-from types import SimpleNamespace
 from uuid import uuid4
 from typing import Literal
 
@@ -19,20 +18,26 @@ from ..workflows.prompts import FIELD_NAMES, READ_PROMPT
 from ..worker.jobs import ArtifactExecutor
 from .model_gateway import ModelRequest
 from .reader_contract import READER_VERSION, reader_inputs
-from .verification import locate_quote
+from .reader_sources import quote_units
 
 
 class Candidate(Model):
     value: str = Field(min_length=1)
-    passage_id: str = Field(min_length=1)
-    quote: str = Field(min_length=1)
+    quote_ids: list[str] = Field(min_length=1, max_length=4)
     relation: Literal['supports', 'refutes', 'insufficient'] = 'supports'
 
-    @field_validator('value', 'quote')
+    @field_validator('value')
     @classmethod
     def nonblank(cls, value):
         if not value.strip():
-            raise ValueError('A claim and its quote must contain text')
+            raise ValueError('A claim must contain text')
+        return value
+
+    @field_validator('quote_ids')
+    @classmethod
+    def unique_anchors(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError('Quote IDs must be unique')
         return value
 
 
@@ -65,7 +70,7 @@ def reader_json_text(raw):
 
 
 def reader_diagnostics(error):
-    known = set(FIELD_NAMES) | {'fields', 'missing_reasons', 'value', 'passage_id', 'quote', 'relation'}
+    known = set(FIELD_NAMES) | {'fields', 'missing_reasons', 'value', 'quote_ids', 'relation'}
     return [{'loc': [part if isinstance(part, int) or part in known else '<extra_field>' for part in item['loc']],
              'type': item['type']} for item in error.errors(include_input=False, include_url=False, include_context=False)]
 
@@ -91,27 +96,20 @@ class ExtractionService:
         return max(items, key=lambda e: (e.revision, e.created_at, e.id)) if items else None
 
     @staticmethod
-    def _candidate_location(candidate, batch):
-        return next(((fragment, location) for fragment in batch if fragment['passage_id'] == candidate.passage_id
-            and (location := locate_quote(SimpleNamespace(text=fragment['text']), candidate.quote)).located), None)
-
-    @staticmethod
-    def _output(raw, batch):
+    def _output(raw, units):
         text, _ = reader_json_text(raw)
         output = ReaderOutput.model_validate_json(text)
-        allowed = {fragment['passage_id'] for fragment in batch}
+        allowed = {unit['quote_id'] for unit in units}
         for name in FIELD_NAMES:
             for index, candidate in enumerate(getattr(output.fields, name)):
-                if candidate.passage_id not in allowed:
-                    raise ScholarError(422, 'unknown_passage', 'Reader referenced a passage outside its supplied batch',
-                        details={'diagnostics': [{'loc': ['fields', name, index, 'passage_id'], 'type': 'unknown_passage'}]})
-                if ExtractionService._candidate_location(candidate, batch) is None:
-                    raise ScholarError(422, 'invalid_reader_quote',
-                        '引文无法在同一原文片段中连续定位；请使用原文短句，不得拼接、省略或改写。',
-                        details={'diagnostics': [{'loc': ['fields', name, index, 'quote'], 'type': 'quote_not_contiguous'}]})
+                for position, quote_id in enumerate(candidate.quote_ids):
+                    if quote_id not in allowed:
+                        raise ScholarError(422, 'unknown_quote_id', '阅读结果引用了本批次未提供的引文锚点，无法保存；请检查阅读输出。',
+                            details={'diagnostics': [{'loc': ['fields', name, index, 'quote_ids', position],
+                                                       'type': 'unknown_quote_id'}]})
         return output
 
-    def _batch_result(self, job, manifest, batch):
+    def _batch_result(self, job, manifest, units):
         digest = fingerprint(manifest)
         try:
             if (job is None or job.kind != 'artifact' or job.stage != 'read_paper_batch'
@@ -127,11 +125,16 @@ class ExtractionService:
                     or audit.reader_version != READER_VERSION or audit.diagnostics
                     or audit.sha256 != hashlib.sha256(audit.raw_text.encode('utf-8')).hexdigest()):
                 raise ValueError('Mismatched audit provenance')
-            return self._output(audit.raw_text, batch), audit.id, job.id
+            return self._output(audit.raw_text, units), audit.id, job.id
         except (ScholarError, ValidationError, ValueError, TypeError):
             raise ScholarError(409, 'invalid_reader_batch_cache', 'The saved Reader batch does not match its frozen input') from None
 
     async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch, paper_title):
+        units = quote_units(batch)
+        payload_passages = [{**{key: value for key, value in fragment.items() if key != 'text'},
+            'quote_units': [{'quote_id': unit['quote_id'], 'text': unit['text']}
+                            for unit in units if unit['fragment_index'] == index]}
+            for index, fragment in enumerate(batch)]
         manifest = reader_inputs({'project': project.model_dump(mode='json'), 'paper_version_id': paper_version_id,
             'paper_title': paper_title,
             'document_ids': [document.id for document in documents],
@@ -140,20 +143,22 @@ class ExtractionService:
             'prompt_sha256': hashlib.sha256(READ_PROMPT.encode('utf-8')).hexdigest(), 'batch_index': batch_index,
             'fragments': [{**{key: value for key, value in fragment.items() if key != 'text'},
                            'sha256': hashlib.sha256(fragment['text'].encode('utf-8')).hexdigest()} for fragment in batch],
+            'quote_units': [{**{key: value for key, value in unit.items() if key != 'text'},
+                             'sha256': hashlib.sha256(unit['text'].encode('utf-8')).hexdigest()} for unit in units],
             '_project_id': project.id})
         digest = fingerprint(manifest)
         cached = self.runs.cached_artifact('read_paper_batch', digest, project.id)
         if cached is not None:
-            self._batch_result(cached, manifest, batch)
+            self._batch_result(cached, manifest, units)
 
         async def operation():
             response = await self.gateway.complete(ModelRequest(run_id=run.id, purpose='read_paper', messages=[
                 {'role': 'system', 'content': READ_PROMPT}, {'role': 'user', 'content': json.dumps({
-                    'paper_title': paper_title, 'language': project.language, 'passages': batch}, ensure_ascii=False)}]))
+                    'paper_title': paper_title, 'language': project.language, 'passages': payload_passages}, ensure_ascii=False)}]))
             _, output_format = reader_json_text(response.text)
             failure, diagnostics = None, []
             try:
-                self._output(response.text, batch)
+                self._output(response.text, units)
             except ValidationError as error:
                 diagnostics = reader_diagnostics(error)
                 failure = ('invalid_model_output', 'Reader returned invalid structured fields; review this paper')
@@ -183,7 +188,7 @@ class ExtractionService:
             raise
         job = next((item for item in self.runs.list_jobs(run.id)
                     if item.stage == 'read_paper_batch' and item.kind == 'artifact' and item.input_hash == digest), None)
-        return self._batch_result(job, manifest, batch)
+        return (*self._batch_result(job, manifest, units), units)
 
     async def extract(self, run_id, paper_version_id, document_ids):
         run = self.runs.get_run(run_id)
@@ -218,12 +223,12 @@ class ExtractionService:
         candidates, audits, batch_jobs = [], [], []
         missing = {name: [] for name in FIELD_NAMES}
         for batch_index, batch in enumerate(batches):
-            output, audit_id, job_id = await self._read_batch(run, project, paper_version_id, documents, batch_index, batch, version.title)
+            output, audit_id, job_id, units = await self._read_batch(run, project, paper_version_id, documents, batch_index, batch, version.title)
             audits.append(audit_id)
             batch_jobs.append(job_id)
             for name in FIELD_NAMES:
                 values = getattr(output.fields, name)
-                candidates.extend((name, candidate, batch) for candidate in values)
+                candidates.extend((name, candidate, {unit['quote_id']: unit for unit in units}) for candidate in values)
                 if not values:
                     missing[name].append(output.missing_reasons[name].strip())
         if not candidates:
@@ -242,31 +247,29 @@ class ExtractionService:
             fields[name] = ExtractedField(missing_reason=reason)
         claims, evidence = [], []
         seen = set()
-        for field, candidate, batch in candidates:
-            key = (field, candidate.value, candidate.passage_id, candidate.quote)
+        for field, candidate, units in candidates:
+            selected = [units[quote_id] for quote_id in candidate.quote_ids]
+            key = (field, candidate.value, tuple((unit['passage_id'], unit['start'], unit['end']) for unit in selected))
             if key in seen:
                 continue
             seen.add(key)
-            passage = passages.get(candidate.passage_id)
-            if passage is None:
-                # Unknown IDs must never be attached to another stored source.
-                raise ScholarError(422, 'unknown_passage', 'Reader referenced a passage outside its input')
-            located = self._candidate_location(candidate, batch)
-            start = located[0]['start'] + located[1].start if located else None
-            end = located[0]['start'] + located[1].end if located else None
-            in_batch = located is not None
-            scope = 'abstract' if kinds[passage.document_version_id] == 'abstract' else 'fulltext'
-            status = 'needs_recheck' if in_batch else 'insufficient_evidence'
-            claim = ClaimRevision(run_id=run_id, text=candidate.value, source_scope=scope, status=status)
-            item = Evidence(claim_revision_id=claim.id, passage_id=passage.id, quote=candidate.quote,
-                relation=candidate.relation, locator_status='located' if in_batch else 'unlocated',
-                quote_start=start, quote_end=end)
+            scope = 'abstract' if any(unit['source_scope'] == 'abstract' for unit in selected) else 'fulltext'
+            claim = ClaimRevision(run_id=run_id, text=candidate.value, source_scope=scope, status='needs_recheck')
+            items = []
+            for unit in selected:
+                passage = passages[unit['passage_id']]
+                quote = passage.text[unit['start']:unit['end']]
+                if quote != unit['text']:
+                    raise ScholarError(409, 'invalid_reader_source', 'Reader source anchor no longer matches its frozen text')
+                items.append(Evidence(claim_revision_id=claim.id, passage_id=passage.id, quote=quote,
+                    relation=candidate.relation, locator_status='located',
+                    quote_start=unit['start'], quote_end=unit['end']))
             claims.append(claim)
-            evidence.append(item)
+            evidence.extend(items)
             cell = fields[field]
             fields[field] = ExtractedField(value='\n'.join(v for v in [cell.value, candidate.value] if v),
-                claim_ids=cell.claim_ids + [claim.id], evidence_ids=cell.evidence_ids + [item.id],
-                review_status='insufficient_evidence' if status == 'insufficient_evidence' or cell.review_status == 'insufficient_evidence' else 'needs_recheck')
+                claim_ids=cell.claim_ids + [claim.id], evidence_ids=cell.evidence_ids + [item.id for item in items],
+                review_status='needs_recheck')
         with self.db.transaction() as conn:
             previous = self.latest(project.id, paper_version_id, conn)
             extraction = ExtractionRevision(project_id=project.id, run_id=run_id, paper_version_id=paper_version_id,
