@@ -71,3 +71,20 @@ class DraftAcceptance(Entity):
     project_id: str
     report_version_id: str
     verification_record_id: str
+
+
+class WriterOutputDiagnostic(Model):
+    loc: list[str | int]
+    type: str
+
+
+class WriterOutputAudit(Entity):
+    project_id: str
+    run_id: str
+    raw_text: str
+    sha256: str
+    provider_request_id: str | None = None
+    usage: dict | None = None
+    output_format: Literal['json', 'json_fence']
+    parser_version: str = 'writer-json-v1'
+    diagnostics: list[WriterOutputDiagnostic] = Field(default_factory=list)

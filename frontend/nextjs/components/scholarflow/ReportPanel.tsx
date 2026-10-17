@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExportJob, Page, ReportBlock, ReportDetail, ReportVersion, Run } from '@/types/scholarflow';
 import { api, keyFor, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
+import { latestResearchRun } from '@/lib/scholarflow/runs';
 import { markdownToHtml } from '@/helpers/markdownHelper';
 import CitationInspector from './CitationInspector';
 import CitationBinder from './CitationBinder';
@@ -10,6 +11,7 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
   const [versions, setVersions] = useState<ReportVersion[]>([]), [selected, setSelected] = useState<string>();
   const [detail, setDetail] = useState<ReportDetail>(), [blocks, setBlocks] = useState<ReportBlock[]>([]), [active, setActive] = useState(0);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false);
+  const [listError, setListError] = useState(''), [detailError, setDetailError] = useState('');
   const [preview, setPreview] = useState(false), [html, setHtml] = useState(''), [mobile, setMobile] = useState<'editor' | 'citations'>('editor');
   const [format, setFormat] = useState<'markdown' | 'docx' | 'bibtex'>('markdown'), [exports, setExports] = useState<ExportJob[]>([]);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -18,20 +20,33 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
   const dirty = dirtyBlocks.size > 0;
   const locked = busy || selected !== detail?.version.id;
   const load = useCallback(async () => {
-    try { const list = await scholarRequest<Page<ReportVersion>>(`/projects/${projectId}/reports`); setVersions(list.items); setSelected(id => id || list.items[0]?.id); }
-    catch (failure) { setError(messageFor(failure)); }
+    try { const list = await scholarRequest<Page<ReportVersion>>(`/projects/${projectId}/reports`); setVersions(list.items); setSelected(id => id || list.items[0]?.id); setListError(''); }
+    catch (failure) { setListError(messageFor(failure)); }
   }, [projectId]);
   useEffect(() => { void load(); const timer = setInterval(() => void load(), 3000); return () => clearInterval(timer); }, [load]);
   useEffect(() => {
     if (!selected) return;
-    let alive = true;
-    scholarRequest<ReportDetail>(`/reports/${selected}`).then(value => {
-      if (!alive) return; setDetail(value); setActive(0); setConfirmedBlocks(new Set());
-      let cached: ReportBlock[] | undefined;
-      try { const raw = sessionStorage.getItem('sf-report:' + selected); if (raw) { const values: unknown = JSON.parse(raw); if (Array.isArray(values) && values.length === value.version.blocks.length && values.every((v, i) => v && typeof v === 'object' && 'text' in v && typeof v.text === 'string' && 'id' in v && v.id === value.version.blocks[i].id)) cached = value.version.blocks.map((block, i) => ({ ...block, text: String(values[i].text) })); } } catch {}
-      setBlocks(cached || value.version.blocks);
-    }).catch(failure => setError(messageFor(failure)));
-    return () => { alive = false; };
+    let alive = true, polling = false, initialized = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const value = await scholarRequest<ReportDetail>(`/reports/${selected}`);
+        if (!alive) return;
+        if (!initialized) {
+          initialized = true;
+          setDetail(value); setActive(0); setConfirmedBlocks(new Set());
+          let cached: ReportBlock[] | undefined;
+          try { const raw = sessionStorage.getItem('sf-report:' + selected); if (raw) { const values: unknown = JSON.parse(raw); if (Array.isArray(values) && values.length === value.version.blocks.length && values.every((v, i) => v && typeof v === 'object' && 'text' in v && typeof v.text === 'string' && 'id' in v && v.id === value.version.blocks[i].id)) cached = value.version.blocks.map((block, i) => ({ ...block, text: String(values[i].text) })); } } catch {}
+          setBlocks(cached || value.version.blocks);
+        } else {
+          setDetail(previous => previous?.version.id === value.version.id ? { ...previous, verification: value.verification, outdated: value.outdated } : previous);
+        }
+        setDetailError('');
+      } catch (failure) { if (alive) setDetailError(messageFor(failure)); }
+      finally { polling = false; }
+    };
+    void poll(); const timer = setInterval(() => void poll(), 2500); return () => { alive = false; clearInterval(timer); };
   }, [selected]);
   useEffect(() => { if (selected && detail?.version.id === selected) { try { if (dirty) sessionStorage.setItem('sf-report:' + selected, JSON.stringify(blocks)); else sessionStorage.removeItem('sf-report:' + selected); } catch { setNotice('浏览器缓存不可用，请及时保存本地修改'); } } }, [blocks, selected, detail, dirty]);
   useEffect(() => {
@@ -39,8 +54,8 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
     let alive = true;
     const poll = async () => {
       try {
-        const [value, files] = await Promise.all([scholarRequest<ReportDetail>(`/reports/${selected}`), scholarRequest<Page<ExportJob>>(`/reports/${selected}/exports`)]);
-        if (alive) { setDetail(previous => previous?.version.id === value.version.id ? { ...previous, verification: value.verification, outdated: value.outdated } : previous); setExports(files.items); }
+        const files = await scholarRequest<Page<ExportJob>>(`/reports/${selected}/exports`);
+        if (alive) setExports(files.items);
       } catch {}
     };
     void poll(); const timer = setInterval(() => void poll(), 2500); return () => { alive = false; clearInterval(timer); };
@@ -63,13 +78,19 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
     return target && typeof target === 'object' && 'report_version_id' in target && target.report_version_id === selected && 'verification_record_id' in target && target.verification_record_id === detail?.verification?.id;
   });
   const canExport = !locked && !dirty && detail?.verification && (detail.verification.quality_status === 'passed' || acceptedRun);
-  if (!detail) return <div className="sf-card sf-empty">{error || (versions.length ? '正在载入报告…' : '完成纳入文献的阅读与综合后，报告将在这里生成。')}</div>;
+  const research = latestResearchRun(runs);
+  const emptyMessage = research?.status === 'failed' ? '本次研究未生成可显示的报告，请查看下方运行进度中的失败原因。'
+    : research?.stage === 'write' && research.status === 'queued' ? '报告写作已排队，完成后会自动显示。请查看下方运行进度。'
+    : research?.stage === 'write' && research.status === 'running' ? '正在撰写报告，生成后会自动显示。请查看下方运行进度。'
+    : '完成纳入文献的阅读与综合后，报告将在这里生成。';
+  const failure = error || detailError || listError;
+  if (!detail) return <div role={failure ? 'alert' : 'status'} className="sf-card sf-empty">{failure || (versions.length ? '正在载入报告…' : emptyMessage)}</div>;
   return <div className="sf-stack"><section className="sf-card"><div className="sf-between"><div><h2>{detail.version.title}</h2><p className="sf-muted sf-small">报告版本 {detail.version.revision} · {detail.version.id}</p></div>
     <select disabled={locked} aria-label="报告版本" style={{ maxWidth: 210 }} value={selected} onChange={e => { if (dirty) setError('请先保存或放弃本地修改，再切换版本'); else setSelected(e.target.value); }}>{versions.map(v => <option value={v.id} key={v.id}>版本 {v.revision}</option>)}</select></div>
     <div className="sf-row" style={{ marginTop: 14 }}><span className="sf-badge sf-amber">{detail.verification?.quality_status === 'passed' ? '质量检查通过' : detail.verification ? '存在质量问题' : '尚未核验'}</span>
       {dirty && <><span className="sf-badge sf-amber">存在未保存修改</span><span className="sf-badge sf-amber">引用待复核</span></>}
       {detail.outdated && <span className="sf-badge sf-amber">报告已过期：文献版本或提取项有更新</span>}</div>
-    {error && <p role="alert" className="sf-error" style={{ marginTop: 14 }}>{error}</p>}{notice && <p role="status" className="sf-notice" style={{ marginTop: 14 }}>{notice}</p>}
+    {failure && <p role="alert" className="sf-error" style={{ marginTop: 14 }}>{failure}</p>}{notice && <p role="status" className="sf-notice" style={{ marginTop: 14 }}>{notice}</p>}
     <div className="sf-row" style={{ marginTop: 16 }}><button disabled={!dirty || locked} onClick={() => void perform(save)}>保存新报告版本</button>
       {dirty && <button disabled={locked} onClick={() => { setBlocks(detail.version.blocks); setConfirmedBlocks(new Set()); setError(''); }}>放弃本地修改</button>}
       <button disabled={dirty || locked} onClick={() => void perform(async () => { await scholarRequest(`/reports/${selected}/checks`, write('POST', {}, keyFor())); setNotice('独立复核任务已创建'); await onRefresh(); })}>复核此版本</button>
