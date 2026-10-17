@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .common import Entity, Model
 
@@ -86,3 +86,16 @@ class ReaderOutputAudit(Entity):
     diagnostics: list[ReaderOutputDiagnostic] = Field(default_factory=list)
     normalizations: list[ReaderOutputDiagnostic] = Field(default_factory=list)
     reused_from_audit_id: str | None = None
+    origin: Literal['model', 'source_review'] = 'model'
+    reviewer: str | None = None
+    review_reason: str | None = None
+
+    @model_validator(mode='after')
+    def explicit_source_review(self):
+        if self.origin == 'source_review':
+            if not self.reviewer or not self.reviewer.strip() or not self.review_reason or not self.review_reason.strip():
+                raise ValueError('A source review needs a reviewer and explicit reason')
+            if (self.provider_request_id is not None or self.usage is not None or self.diagnostics
+                    or self.normalizations or self.reused_from_audit_id is not None or self.output_format != 'json'):
+                raise ValueError('A source review cannot impersonate or repair a model response')
+        return self

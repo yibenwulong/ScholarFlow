@@ -38,6 +38,8 @@ Reading extracts facts from the selected paper independently of the project's to
 
 Reader compatibility handling separates an unbound absence entry from a scientific claim only when the same field already has an explicit missing reason. It never invents a value or source anchor. A response rejected by an earlier parser can be revalidated inside a new leased batch operation only when a failed batch job and its original audit match the complete frozen input. The original audit remains unchanged; the new audit links to it and records normalization steps. Publication still requires the new batch and paper artifacts to finish under their ownership fences.
 
+An explicit `source_review` can record that a checked batch contains no extractable facts about the paper, such as pages containing only bibliography entries. Its audit records the reviewer and reason, five empty field arrays and batch-scoped missing reasons. This review runs as a separate leased batch operation; the paper still uses its successfully read body batches and their original evidence.
+
 Model attempts are reserved transactionally before dispatch. The legacy helper retains its default retry behavior for existing callers; ScholarFlow uses one helper attempt and disables known SDK retries, leaving audited retries to jobs. OpenAI-compatible, Azure OpenAI, Anthropic and Ollama are the enabled new gateway adapters. Unknown token usage/prices remain unknown. An uncommitted response may be repeated after a crash and incur additional billing.
 
 ## Boundaries

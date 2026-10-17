@@ -171,6 +171,10 @@ class ExtractionService:
             output = self._output(audit.raw_text, units)
             if [item.model_dump() for item in audit.normalizations] != output._normalizations:
                 raise ValueError('Mismatched normalization metadata')
+            if audit.origin == 'source_review' and (output._normalizations
+                    or any(getattr(output.fields, name) for name in FIELD_NAMES)
+                    or set(output.missing_reasons) != set(FIELD_NAMES)):
+                raise ValueError('A source review must explicitly leave all five fields empty')
             return output, audit.id, job.id
         except (ScholarError, ValidationError, ValueError, TypeError):
             raise ScholarError(409, 'invalid_reader_batch_cache', 'The saved Reader batch does not match its frozen input') from None
@@ -208,7 +212,7 @@ class ExtractionService:
                     audit = ReaderOutputAudit.model_validate(linked[0])
                     if (audit.project_id != origin.project_id or audit.paper_version_id != manifest['paper_version_id']
                             or audit.document_version_ids != manifest['document_ids']
-                            or audit.reader_version != READER_VERSION or not audit.diagnostics
+                            or audit.reader_version != READER_VERSION or audit.origin != 'model' or not audit.diagnostics
                             or audit.reused_from_audit_id is not None
                             or audit.sha256 != hashlib.sha256(audit.raw_text.encode('utf-8')).hexdigest()):
                         continue
@@ -218,12 +222,9 @@ class ExtractionService:
                 return audit, job
         return None
 
-    async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch, paper_title):
+    @staticmethod
+    def _batch_manifest(run, project, paper_version_id, documents, batch_index, batch, paper_title):
         units = quote_units(batch)
-        payload_passages = [{**{key: value for key, value in fragment.items() if key != 'text'},
-            'quote_units': [{'quote_id': unit['quote_id'], 'text': unit['text']}
-                            for unit in units if unit['fragment_index'] == index]}
-            for index, fragment in enumerate(batch)]
         manifest = reader_inputs({'project': project.model_dump(mode='json'), 'paper_version_id': paper_version_id,
             'paper_title': paper_title,
             'document_ids': [document.id for document in documents],
@@ -235,6 +236,110 @@ class ExtractionService:
             'quote_units': [{**{key: value for key, value in unit.items() if key != 'text'},
                              'sha256': hashlib.sha256(unit['text'].encode('utf-8')).hexdigest()} for unit in units],
             '_project_id': project.id})
+        return manifest, units
+
+    def _source_review_inputs(self, run_id, source_job_id, expected_input_hash):
+        try:
+            run = self.runs.get_run(run_id)
+            source = self.runs.get_job(source_job_id)
+            origin = self.runs.get_run(source.run_id)
+            frozen = source.input_manifest
+            if (source.kind != 'artifact' or source.stage != 'read_paper_batch' or source.status != 'failed'
+                    or run.id == origin.id or run.status in {'cancelled', 'completed'} or origin.status == 'cancelled'
+                    or run.project_id != origin.project_id or frozen.get('_project_id') != run.project_id
+                    or source.input_hash != expected_input_hash or fingerprint(frozen) != expected_input_hash
+                    or frozen.get('reader_version') != READER_VERSION
+                    or type(frozen.get('batch_index')) is not int or frozen['batch_index'] < 0):
+                raise ValueError('No matching failed source batch')
+            project = Project.model_validate(frozen['project'])
+            if (project.id != run.project_id
+                    or run.request_snapshot.get('project', frozen['project']) != frozen['project']
+                    or origin.request_snapshot.get('model', {}) != frozen['model']):
+                raise ValueError('Mismatched frozen project or model')
+            version = self.records.get('paper_version', frozen['paper_version_id'], PaperVersion)
+            PaperStore(self.db).association(project.id, version.paper_id)
+            document_ids = frozen['document_ids']
+            if not isinstance(document_ids, list) or not document_ids or len(set(document_ids)) != len(document_ids):
+                raise ValueError('Invalid document selection')
+            documents = [self.store.document(document_id) for document_id in document_ids]
+            if any(document.paper_version_id != version.id or document.parse_status != 'ready' for document in documents):
+                raise ValueError('Mismatched source documents')
+            passages = {passage.id: passage for document in documents for passage in self.store.passages(document.id)}
+            kinds = {document.id: document.kind for document in documents}
+            batch = []
+            for fragment in frozen['fragments']:
+                passage = passages[fragment['passage_id']]
+                start, end = fragment['start'], fragment['end']
+                if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(passage.text):
+                    raise ValueError('Invalid original source offsets')
+                batch.append({'passage_id': passage.id, 'document_version_id': passage.document_version_id,
+                    'source_scope': 'abstract' if kinds[passage.document_version_id] == 'abstract' else 'fulltext',
+                    'page_number': passage.page_number, 'start': start, 'end': end, 'text': passage.text[start:end]})
+            if not batch:
+                raise ValueError('No source fragments')
+            manifest, units = self._batch_manifest(run, project, version.id, documents, frozen['batch_index'], batch, version.title)
+            if manifest != frozen or fingerprint(manifest) != expected_input_hash:
+                raise ValueError('Source text or unit map does not match the frozen batch')
+            return run, source, manifest, units
+        except (ScholarError, ValidationError, ValueError, TypeError, KeyError):
+            raise ScholarError(409, 'invalid_reader_source_review', '来源复核必须对应同项目、同输入且可验证原文位置的失败阅读批次。') from None
+
+    async def review_source_batch(self, run_id, source_job_id, *, expected_input_hash, reviewer, review_reason, missing_reasons):
+        """Record an explicit local, claim-free review under a NEW batch lease.
+
+        This internal entry point never detects reference sections automatically,
+        invokes the gateway, publishes an extraction, or changes the old failure.
+        """
+        if (not isinstance(reviewer, str) or not reviewer.strip()
+                or not isinstance(review_reason, str) or not review_reason.strip()
+                or not isinstance(missing_reasons, dict) or set(missing_reasons) != set(FIELD_NAMES)
+                or any(not isinstance(reason, str) or not reason.strip() for reason in missing_reasons.values())):
+            raise ScholarError(422, 'invalid_reader_source_review', '来源复核需要复核者、复核说明和五个字段各自明确的缺失原因。')
+        run, source, manifest, units = self._source_review_inputs(run_id, source_job_id, expected_input_hash)
+        raw = json.dumps({'fields': {name: [] for name in FIELD_NAMES}, 'missing_reasons': missing_reasons},
+                         ensure_ascii=False, sort_keys=True)
+        cached = self.runs.cached_artifact('read_paper_batch', expected_input_hash, run.project_id)
+        if cached:
+            _, audit_id, _ = self._batch_result(cached, manifest, units)
+            previous = self.records.get('reader_output_audit', audit_id, ReaderOutputAudit)
+            if previous.origin != 'source_review':
+                raise ScholarError(409, 'reader_source_review_conflict', '该批次已有模型阅读结果，请先检查现有结果再决定如何复核。')
+
+        async def operation():
+            # Repeat source validation inside the new active artifact execution.
+            self._source_review_inputs(run_id, source_job_id, expected_input_hash)
+            audit = ReaderOutputAudit(project_id=run.project_id, run_id=run.id,
+                paper_version_id=manifest['paper_version_id'], document_version_ids=manifest['document_ids'],
+                input_hash=expected_input_hash, reader_version=READER_VERSION, raw_text=raw,
+                sha256=hashlib.sha256(raw.encode('utf-8')).hexdigest(), output_format='json',
+                origin='source_review', reviewer=reviewer, review_reason=review_reason)
+            with self.db.transaction() as conn:
+                current, original = self.runs.get_run(run.id, conn), self.runs.get_job(source.id, conn)
+                origin = self.runs.get_run(original.run_id, conn)
+                if (current.status == 'cancelled' or origin.status == 'cancelled' or original.status != 'failed'
+                        or original.input_manifest != manifest or original.input_hash != expected_input_hash):
+                    raise ScholarError(409, 'reader_source_review_changed', '复核期间任务状态已变化，本次来源复核未保存。')
+                self.records.insert('reader_output_audit', audit, project_id=run.project_id,
+                    links=[('run', run.id), ('version', manifest['paper_version_id']), ('source_run', source.run_id)]
+                          + [('document', document_id) for document_id in manifest['document_ids']], conn=conn)
+            return {'reader_output_audit_id': audit.id}
+
+        await self.batch_executor.execute(run.id, 'read_paper_batch', manifest, operation)
+        job = next((job for job in self.runs.list_jobs(run.id) if job.kind == 'artifact'
+                    and job.stage == 'read_paper_batch' and job.input_hash == expected_input_hash), None)
+        _, audit_id, job_id = self._batch_result(job, manifest, units)
+        saved = self.records.get('reader_output_audit', audit_id, ReaderOutputAudit)
+        if (saved.origin != 'source_review' or saved.raw_text != raw
+                or saved.reviewer != reviewer or saved.review_reason != review_reason):
+            raise ScholarError(409, 'reader_source_review_conflict', '已有复核记录与本次明确提交的复核内容不同。')
+        return {'reader_output_audit_id': audit_id, 'batch_job_id': job_id}
+
+    async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch, paper_title):
+        manifest, units = self._batch_manifest(run, project, paper_version_id, documents, batch_index, batch, paper_title)
+        payload_passages = [{**{key: value for key, value in fragment.items() if key != 'text'},
+            'quote_units': [{'quote_id': unit['quote_id'], 'text': unit['text']}
+                            for unit in units if unit['fragment_index'] == index]}
+            for index, fragment in enumerate(batch)]
         digest = fingerprint(manifest)
         cached = self.runs.cached_artifact('read_paper_batch', digest, project.id)
         if cached is not None:
