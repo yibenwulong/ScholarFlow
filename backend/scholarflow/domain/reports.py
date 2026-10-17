@@ -85,6 +85,7 @@ class WriterOutputAudit(Entity):
     sha256: str
     provider_request_id: str | None = None
     usage: dict | None = None
+    finish_reason: str | None = None
     output_format: Literal['json', 'json_fence']
     parser_version: str = 'writer-json-v1'
     diagnostics: list[WriterOutputDiagnostic] = Field(default_factory=list)

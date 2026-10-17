@@ -22,6 +22,7 @@ class ModelResponse(Model):
     text: str
     provider_request_id: str | None = None
     usage: dict | None = None
+    finish_reason: str | None = None
 
 
 class ModelConfig(Model):
@@ -107,4 +108,6 @@ class ModelGateway:
             llm_kwargs=options, usage_callback=capture)
         response_meta = metadata.get('response_metadata') or {}
         return ModelResponse(text=text, usage=metadata.get('usage'),
-                             provider_request_id=response_meta.get('id') or response_meta.get('request_id'))
+                             provider_request_id=response_meta.get('id') or response_meta.get('request_id'),
+                             finish_reason=(response_meta.get('finish_reason') or response_meta.get('stop_reason')
+                                            or response_meta.get('done_reason')))

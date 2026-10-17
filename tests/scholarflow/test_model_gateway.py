@@ -179,7 +179,8 @@ async def test_adapter_disables_sdk_retries_and_preserves_unknown_usage(job_cont
     observed = {}
     async def helper(messages, **kwargs):
         observed.update(kwargs)
-        kwargs['usage_callback']({'usage': None, 'response_metadata': {'id': 'test-request'}})
+        reason_key = {'ollama': 'done_reason', 'anthropic': 'stop_reason'}.get(provider, 'finish_reason')
+        kwargs['usage_callback']({'usage': None, 'response_metadata': {'id': 'test-request', reason_key: 'length'}})
         return 'fixture'
     monkeypatch.setattr(llm, 'create_chat_completion', helper)
     response = await ModelGateway(store.db).complete(ModelRequest(run_id=run.id, purpose='read', messages=[]))
@@ -192,6 +193,7 @@ async def test_adapter_disables_sdk_retries_and_preserves_unknown_usage(job_cont
         assert options['max_retries'] == 0
     assert response.usage is None
     assert response.provider_request_id == 'test-request'
+    assert response.finish_reason == 'length'
 
 
 @pytest.mark.asyncio

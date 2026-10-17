@@ -5,6 +5,8 @@ import json
 import pytest
 
 from backend.scholarflow.domain.errors import ScholarError
+from backend.scholarflow.domain.evidence import ClaimRevision, Evidence
+from backend.scholarflow.domain.reports import ReportBlock
 from backend.scholarflow.services.extractions import ExtractionService
 from backend.scholarflow.services.model_gateway import ModelResponse
 from backend.scholarflow.services.reports import ReportService
@@ -30,14 +32,15 @@ async def writer_boundary_context(extraction_context):
 
 
 class RecordedWriter:
-    def __init__(self, text):
+    def __init__(self, text, finish_reason=None):
         self.text = text
+        self.finish_reason = finish_reason
         self.requests = []
 
     async def complete(self, request):
         self.requests.append(request)
         return ModelResponse(text=self.text, provider_request_id='writer-request-fixture',
-                             usage={'input_tokens': 20, 'output_tokens': 30})
+                             usage={'input_tokens': 20, 'output_tokens': 30}, finish_reason=self.finish_reason)
 
 
 def writer_service(context, text):
@@ -50,6 +53,63 @@ def audit_rows(service):
     with service.db.transaction(write=False) as conn:
         return [json.loads(row['payload']) for row in conn.execute(
             "SELECT payload FROM entities WHERE kind='writer_output_audit' ORDER BY created_at,id")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('complete_json', [False, True])
+@pytest.mark.parametrize('finish_reason', ['length', 'max_tokens'])
+async def test_truncated_writer_response_is_audited_and_never_saved(writer_boundary_context, complete_json, finish_reason):
+    payload = json.dumps(writer_boundary_context[3])
+    text = payload if complete_json else payload[:-4]
+    service, model, run, extraction = writer_service(writer_boundary_context, text)
+    model.finish_reason = finish_reason
+    with pytest.raises(ScholarError) as failure:
+        await service.compose(run.id, {'extraction_ids': [extraction.id]})
+    assert failure.value.code == 'writer_output_truncated'
+    assert failure.value.retryable is False
+    audit, = audit_rows(service)
+    assert audit['raw_text'] == text
+    assert audit['finish_reason'] == finish_reason
+    assert audit['id'] == failure.value.details['writer_output_audit_id']
+    assert service.store.list(run.project_id) == []
+    assert len(model.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_writer_receives_actual_claim_evidence_pairs_not_array_position_guesses(writer_boundary_context):
+    from uuid import uuid4
+    service, model, run, extraction = writer_service(writer_boundary_context, json.dumps(writer_boundary_context[3]))
+    field = extraction.fields['method']
+    claim = service.records.get('claim', field.claim_ids[0], ClaimRevision)
+    evidence = service.records.get('evidence', field.evidence_ids[0], Evidence)
+    other_claim = claim.model_copy(update={'id': str(uuid4()), 'text': 'Another finding.'})
+    other_evidence = evidence.model_copy(update={'id': str(uuid4()), 'claim_revision_id': other_claim.id})
+    service.records.insert('claim', other_claim, project_id=run.project_id)
+    service.records.insert('evidence', other_evidence, project_id=run.project_id)
+    fields = dict(extraction.fields, method=field.model_copy(update={
+        'claim_ids': [claim.id, other_claim.id], 'evidence_ids': [other_evidence.id, evidence.id]}))
+    amended = extraction.model_copy(update={'id': str(uuid4()), 'fields': fields})
+    service.records.insert('extraction', amended, project_id=run.project_id)
+    await service.compose(run.id, {'extraction_ids': [amended.id]})
+    inputs = json.loads(model.requests[0].messages[-1]['content'])
+    pairs = inputs['extractions'][0]['fields']['method']['citation_pairs']
+    assert {(pair['claim_revision_id'], pair['evidence_id']) for pair in pairs} == {
+        (claim.id, evidence.id), (other_claim.id, other_evidence.id)}
+
+
+@pytest.mark.asyncio
+async def test_saved_coverage_tracks_citations_removed_and_restored_by_user(writer_boundary_context):
+    service, _, run, extraction = writer_service(writer_boundary_context, json.dumps(writer_boundary_context[3]))
+    draft = await service.compose(run.id, {'extraction_ids': [extraction.id]})
+    first = service.save(run.project_id, draft, 0)
+    assert first.manifest['coverage']['cited_paper_version_ids'] == [extraction.paper_version_id]
+    edited = draft.model_copy(update={'blocks': [ReportBlock(id='method', text='No cited statements.')]})
+    second = service.save(run.project_id, edited, first.revision)
+    assert second.manifest['coverage']['cited_paper_version_ids'] == []
+    assert second.manifest['coverage']['uncited_paper_version_ids'] == [extraction.paper_version_id]
+    third = service.save(run.project_id, draft, second.revision)
+    assert third.manifest['coverage']['cited_paper_version_ids'] == [extraction.paper_version_id]
+    assert third.manifest['coverage']['uncited_paper_version_ids'] == []
 
 
 @pytest.mark.asyncio

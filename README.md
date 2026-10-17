@@ -19,6 +19,8 @@ ScholarFlow is based on [GPT Researcher](https://github.com/assafelovic/gpt-rese
 
 Execution status and quality status are separate. Source location and model support assessments help review a report; they do not establish scientific truth or guarantee exhaustive search coverage.
 
+The Writer requests a concise draft sized to the frozen output token limit, supplies explicit claim/evidence pairs and records cited versus uncited inputs. A provider-reported length limit retains the raw response as an audit and rejects the incomplete report. See [report writing troubleshooting](docs/scholarflow/report-writing-troubleshooting.md).
+
 ## Run locally
 
 Requires Python **3.12+** and Node **22+**. Commands below use an activated virtual environment.

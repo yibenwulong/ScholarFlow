@@ -17,7 +17,7 @@ from ..persistence.evidence_store import EvidenceStore
 from ..persistence.report_store import ReportStore
 from ..persistence.run_store import RunStore, fingerprint
 from .citations import citation_tokens, render_citations
-from .model_gateway import ModelRequest
+from .model_gateway import ModelConfig, ModelRequest
 from .verification import Verifier
 
 
@@ -66,6 +66,13 @@ Include scope, themes, method comparisons, disagreements, limitations, next rese
 Use only allowed citation keys and supplied claims/evidence. Every citation occurrence has its own token_index (zero-based within its block) and exact character span for the supported statement before its token. Do not include the citation token in the claim span.
 Preserve missing data and uncertainty. Abstract-only evidence must be labelled. Avoid unsupported first/best/no prior research claims. Never invent bibliography or experimental details.'''
 
+WRITE_BUDGET_PROMPT = '''The output_budget is a hard generation limit for the entire JSON response, including citation metadata.
+Write a concise draft in compact JSON without indentation. Fit all text fields together within max_body_characters; use at most max_blocks blocks and max_citation_occurrences citations in total.
+Combine related sections to cover scope, themes/comparisons, disagreements/limitations, next directions and coverage. Choose representative evidence; do not enumerate every supplied fact or ID.
+For each citation select only the necessary supplied citation_pairs, never guess claim/evidence pairs from array positions. Use exact IDs, not invented aliases.
+State that this is a concise evidence sample, with selected/read/abstract-only counts from coverage and any uncited or out-of-scope limitations. Do not imply that every selected paper is discussed or that all selected papers are recent/relevant.
+Prefer a shorter complete JSON object to an unfinished detailed report. End all strings, arrays and objects within max_tokens. Preserve uncertainty and explicit evidence spans even when shortening. Feedback must also fit this same budget.'''
+
 
 class ReportService:
     def __init__(self, db, gateway, *, verifier=None):
@@ -84,6 +91,7 @@ class ReportService:
         extraction_ids = extraction_manifest['extraction_ids']
         prepared = run.manifests.get('documents', {}).get('papers', [])
         coverage = {'selected_paper_version_ids': run.manifests.get('selection', {}).get('paper_version_ids', []),
+                    'read_paper_version_ids': [],
                     'unreadable_paper_version_ids': [p['paper_version_id'] for p in prepared if not p['document_version_ids']],
                     'abstract_only_paper_version_ids': [p['paper_version_id'] for p in prepared if p.get('source_scope') == 'abstract'],
                     'search_results': run.manifests.get('search', {}).get('results', [])}
@@ -95,14 +103,33 @@ class ReportService:
             paper = self.records.get('paper_version', extraction.paper_version_id, PaperVersion)
             key = 'sf_' + paper.id.replace('-', '')
             bindings.append(CitationBinding(key=key, paper_version_id=paper.id, bibliography_snapshot=self._bibliography(paper)))
-            inputs.append({'key': key, 'paper_version_id': paper.id, 'fields': extraction.model_dump()['fields']})
+            fields = extraction.model_dump()['fields']
+            for field in fields.values():
+                pairs = []
+                for evidence_id in field['evidence_ids']:
+                    evidence = self.records.get('evidence', evidence_id, Evidence)
+                    if evidence.claim_revision_id in field['claim_ids']:
+                        pairs.append({'claim_revision_id': evidence.claim_revision_id, 'evidence_id': evidence.id})
+                field['citation_pairs'] = pairs
+            inputs.append({'key': key, 'paper_version_id': paper.id, 'fields': fields})
+            coverage['read_paper_version_ids'].append(paper.id)
             documents.extend(extraction.document_version_ids)
+        config = ModelConfig.model_validate(run.request_snapshot.get('model', {}))
+        output_budget = {'max_tokens': config.max_tokens, 'max_blocks': 6,
+                         'max_body_characters': min(1200, max(40, config.max_tokens // 3)),
+                         'max_citation_occurrences': min(8, max(1, config.max_tokens // 450))}
         response = await self.gateway.complete(ModelRequest(run_id=run.id, purpose='write_report', messages=[
-            {'role': 'system', 'content': WRITE_PROMPT}, {'role': 'user', 'content': json.dumps({
+            {'role': 'system', 'content': WRITE_PROMPT + '\n' + WRITE_BUDGET_PROMPT}, {'role': 'user', 'content': json.dumps({
                 'question': project.question, 'language': project.language, 'report_type': project.report_type,
-                'extractions': inputs, 'coverage': coverage,
+                'extractions': inputs, 'coverage': coverage, 'output_budget': output_budget,
                 'review_feedback': extraction_manifest.get('feedback', [])}, ensure_ascii=False)}]))
         text, output_format = writer_json_text(response.text)
+        if response.finish_reason in {'length', 'max_tokens'}:
+            diagnostics = [{'loc': [], 'type': 'output_token_limit'}]
+            audit = self._audit_writer_output(run, response, output_format, diagnostics)
+            raise ScholarError(422, 'writer_output_truncated',
+                '报告输出达到模型长度上限，内容未完成；原文已保留。请缩短报告内容后重试写作，论文阅读结果无需重做。',
+                details={'writer_output_audit_id': audit.id, 'diagnostics': diagnostics})
         try:
             output = WriterOutput.model_validate_json(text)
         except ValidationError as error:
@@ -152,7 +179,8 @@ class ReportService:
         audit = self._audit_writer_output(run, response, output_format, diagnostics)
         return ReportDraft(run_id=run.id, title=output.title, blocks=blocks, bindings=bindings,
                            manifest={'extraction_ids': extraction_ids, 'document_version_ids': list(dict.fromkeys(documents)),
-                                     'coverage': coverage, 'writer_issues': writer_issues, 'writer_output_audit_id': audit.id})
+                                     'coverage': coverage, 'output_budget': output_budget,
+                                     'writer_issues': writer_issues, 'writer_output_audit_id': audit.id})
 
     def _audit_writer_output(self, run, response, output_format, diagnostics):
         # Each response is sealed with its parse diagnostics as an immutable
@@ -160,6 +188,7 @@ class ReportService:
         audit = WriterOutputAudit(project_id=run.project_id, run_id=run.id, raw_text=response.text,
             sha256=hashlib.sha256(response.text.encode('utf-8')).hexdigest(),
             provider_request_id=response.provider_request_id, usage=response.usage,
+            finish_reason=response.finish_reason,
             output_format=output_format, diagnostics=diagnostics)
         return self.records.insert('writer_output_audit', audit, project_id=run.project_id, links=[('run', run.id)])
 
@@ -234,7 +263,12 @@ class ReportService:
                     occurrences.append(CitationOccurrence(id=str(uuid5(NAMESPACE_URL, f'{version.id}:{block.id}:{index}')),
                         block_id=block.id, token_index=index, claim_revision_ids=claim_ids, evidence_ids=evidence_ids,
                         claim_start=start, claim_end=end))
-            version = version.model_copy(update={'occurrences': occurrences})
+            cited_keys = {token.group(1) for block in blocks for token in citation_tokens(block.text)}
+            coverage = dict(version.manifest.get('coverage', {}),
+                cited_paper_version_ids=[binding.paper_version_id for key, binding in bindings.items() if key in cited_keys],
+                uncited_paper_version_ids=[binding.paper_version_id for key, binding in bindings.items() if key not in cited_keys])
+            version = version.model_copy(update={'occurrences': occurrences,
+                'manifest': dict(version.manifest, coverage=coverage)})
             render_citations(version)
             self.records.insert('report', version, project_id=project_id,
                 links=[('run', draft.run_id)] + [('extraction', eid) for eid in draft.manifest.get('extraction_ids', [])], conn=conn)
