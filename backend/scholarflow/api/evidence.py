@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import Field
 
 from ..domain.common import Model
@@ -6,7 +6,9 @@ from ..domain.errors import not_found, revision_conflict
 from ..domain.evidence import ClaimRevision, Evidence, Passage
 from ..domain.operations import EvidenceReview
 from ..persistence.projections import Published
+from ..services.readings import ReadingService
 from .projects import page
+from .runs import operation_key
 
 
 class ExtractionEdit(Model):
@@ -21,9 +23,22 @@ class ReviewWrite(Model):
     reason: str = Field(min_length=1)
 
 
+class ReadingRetry(Model):
+    source_job_id: str = Field(min_length=1)
+
+
 def evidence_router(services):
     router = APIRouter()
     records = services.documents.store.records
+
+    @router.get('/projects/{project_id}/reading-status')
+    def reading_status(project_id: str):
+        return ReadingService(services.db).status(project_id)
+
+    @router.post('/projects/{project_id}/reading-retries', status_code=202)
+    def reading_retry(project_id: str, data: ReadingRetry,
+                      key: str | None = Header(default=None, alias='Idempotency-Key')):
+        return {'run': ReadingService(services.db).retry(project_id, data.source_job_id, operation_key(key))}
 
     @router.get('/projects/{project_id}/extractions')
     def matrix(project_id: str):

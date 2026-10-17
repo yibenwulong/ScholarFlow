@@ -1,21 +1,30 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import type { ClaimStatus, EvidenceBundle, Extraction, ProjectPaper } from '@/types/scholarflow';
 import { claimLabels } from '@/types/scholarflow';
 import { api, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
 import ComparisonMatrix from './ComparisonMatrix';
 import PdfEvidenceViewer from './PdfEvidenceViewer';
+import ReadingStatusPanel from './ReadingStatusPanel';
 
-export default function EvidencePanel({ projectId, paperId, evidenceId, claimId, papers }: {
-  projectId: string; paperId: string; evidenceId?: string; claimId?: string; papers: ProjectPaper[];
+export default function EvidencePanel({ projectId, paperId, evidenceId, claimId, papers, onRefresh }: {
+  projectId: string; paperId: string; evidenceId?: string; claimId?: string; papers: ProjectPaper[]; onRefresh?: () => Promise<void>;
 }) {
   const [extractions, setExtractions] = useState<Extraction[]>([]), [selectedClaim, setSelectedClaim] = useState(claimId);
   const [bundle, setBundle] = useState<EvidenceBundle>(), [selectedEvidence, setSelectedEvidence] = useState(evidenceId);
   const [view, setView] = useState<'matrix' | 'source'>(claimId ? 'source' : 'matrix');
   const [error, setError] = useState(''), [reason, setReason] = useState(''), [verdict, setVerdict] = useState<ClaimStatus>('needs_recheck'), [notice, setNotice] = useState('');
-  const load = useCallback(async () => { try { setExtractions((await api.extractions(projectId)).items); } catch (failure) { setError(messageFor(failure)); } }, [projectId]);
-  useEffect(() => { void load(); }, [load]);
+  const [extractionError, setExtractionError] = useState('');
+  const loading = useRef(false);
+  const load = useCallback(async () => {
+    if (loading.current) return;
+    loading.current = true;
+    try { setExtractions((await api.extractions(projectId)).items); setExtractionError(''); }
+    catch (failure) { setExtractionError(messageFor(failure)); }
+    finally { loading.current = false; }
+  }, [projectId]);
+  useEffect(() => { void load(); const timer = setInterval(() => void load(), 3000); return () => clearInterval(timer); }, [load]);
   useEffect(() => { if (claimId) { setSelectedClaim(claimId); setView('source'); setSelectedEvidence(evidenceId); } }, [claimId, evidenceId]);
   useEffect(() => {
     if (!selectedClaim) return;
@@ -33,7 +42,8 @@ export default function EvidencePanel({ projectId, paperId, evidenceId, claimId,
     } catch (failure) { setError(messageFor(failure)); }
   }
   return <div className="sf-stack"><div className="sf-row sf-mobile-switch"><button onClick={() => setView('matrix')} aria-pressed={view === 'matrix'}>比较矩阵</button><button onClick={() => setView('source')} aria-pressed={view === 'source'}>原文证据</button></div>
-    {error && <p role="alert" className="sf-error">{error}</p>}{notice && <p role="status" className="sf-notice">{notice}</p>}
+    <ReadingStatusPanel key={projectId} projectId={projectId} papers={papers} onRefresh={onRefresh} />
+    {error && <p role="alert" className="sf-error">{error}</p>}{extractionError && <p role="alert" className="sf-error">{extractionError}</p>}{notice && <p role="status" className="sf-notice">{notice}</p>}
     <div className="sf-evidence-layout"><div className={'sf-evidence-matrix ' + (view === 'source' ? 'sf-mobile-hidden' : '')}><ComparisonMatrix projectId={projectId} papers={papers} extractions={extractions}
       onSaved={load} onEvidence={(id, evidence) => { setSelectedClaim(id); setSelectedEvidence(evidence); setView('source'); setNotice(''); }} /></div>
       <aside className={'sf-card sf-evidence-source ' + (view === 'matrix' ? 'sf-mobile-hidden' : '')}><h2>证据阅读</h2>

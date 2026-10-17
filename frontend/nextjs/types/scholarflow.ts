@@ -12,7 +12,7 @@ export interface Selection extends Entity { project_id: string; paper_version_id
 export type RunStatus = 'queued' | 'running' | 'waiting_for_user' | 'needs_review' | 'completed' | 'failed' | 'cancelled';
 export interface Run extends Entity {
   target_id: string | null;
-  project_id: string; kind: 'literature_review' | 'import' | 'report_check' | 'export'; start_at: string;
+  project_id: string; kind: 'literature_review' | 'paper_read' | 'import' | 'report_check' | 'export'; start_at: string;
   status: RunStatus; stage: string; quality_status: string; model_calls: number;
   pending_action: { type: string; plan_revision_id?: string; report_version_id?: string; verification_record_id?: string } | null;
   manifests: Record<string, unknown>; issues: Array<{ code: string; message: string }>;
@@ -35,6 +35,12 @@ export type FieldName = keyof typeof fieldLabels;
 export interface ExtractedField { value: string | null; claim_ids: string[]; evidence_ids: string[]; review_status: ClaimStatus }
 export interface Extraction extends Entity { project_id: string; paper_version_id: string; document_version_ids: string[];
   fields: Record<FieldName, ExtractedField>; origin: 'ai' | 'human'; previous_id: string | null }
+export interface PaperReadingStatus {
+  paper_version_id: string; source_run_id: string; source_job_id: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'; extraction_id: string | null;
+  error: { code: string; message: string } | null; can_retry: boolean; active_retry_run_id: string | null;
+  retry_block_reason?: string | null;
+}
 export interface Claim extends Entity { run_id: string; text: string; source_scope: 'fulltext' | 'abstract'; status: ClaimStatus }
 export interface Passage extends Entity { document_version_id: string; text: string; page_number: number | null; start: number; end: number }
 export interface Evidence extends Entity { claim_revision_id: string; passage_id: string; quote: string; relation: string;

@@ -42,6 +42,9 @@ class RunService:
         return selection
 
     def create(self, project_id, data: RunCreate, operation_key):
+        if data.kind == 'paper_read':
+            from .readings import ReadingService
+            return ReadingService(self.db).retry(project_id, data.target_id, operation_key)
         scope, digest = f'create_run:{project_id}', fingerprint(data.model_dump())
         with self.db.transaction() as conn:
             previous = conn.execute('SELECT * FROM idempotency WHERE scope=? AND operation_key=?', (scope, operation_key)).fetchone()
@@ -105,6 +108,9 @@ class RunService:
                 raise revision_conflict(run.revision)
             if run.status in {'completed', 'cancelled'}:
                 raise ScholarError(409, 'run_terminal', 'Create a new run to change completed or cancelled research')
+            if run.kind == 'paper_read' and action.action != 'cancel':
+                raise ScholarError(409, 'paper_read_action_unsupported',
+                    'Paper reads only support cancel here; use the project reading-retries endpoint for a new single-paper retry')
             changes, resume = {}, {}
             if action.action == 'cancel':
                 changes = {'status': 'cancelled', 'pending_action': None}

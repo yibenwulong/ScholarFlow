@@ -1,4 +1,4 @@
-import type { EvidenceBundle, Extraction, Page, Plan, Project, ProjectPaper, Run, Selection } from '@/types/scholarflow';
+import type { EvidenceBundle, Extraction, Page, PaperReadingStatus, Plan, Project, ProjectPaper, Run, Selection } from '@/types/scholarflow';
 
 export class ScholarApiError extends Error {
   constructor(public status: number, public code: string, message: string, public details: unknown) { super(message); }
@@ -30,6 +30,9 @@ export const api = {
   selections: (id: string) => scholarRequest<Page<Selection>>(`/projects/${id}/selections`),
   runs: (id: string) => scholarRequest<Page<Run>>(`/projects/${id}/runs`),
   extractions: (id: string) => scholarRequest<Page<Extraction>>(`/projects/${id}/extractions`),
+  readingStatus: (id: string) => scholarRequest<Page<PaperReadingStatus>>(`/projects/${id}/reading-status`),
+  retryReading: (id: string, sourceJobId: string) => scholarRequest<{ run: Run }>(`/projects/${id}/reading-retries`,
+    write('POST', { source_job_id: sourceJobId }, keyFor())),
   evidence: (id: string, signal?: AbortSignal) => scholarRequest<EvidenceBundle>(`/claims/${id}/evidence`, { signal }),
   run: (id: string) => scholarRequest<Run>(`/runs/${id}`),
   start: (id: string, input: { start_at: string; plan_revision_id?: string; selection_id?: string }) =>

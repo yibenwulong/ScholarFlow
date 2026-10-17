@@ -7,7 +7,7 @@ RunStatus = Literal['queued', 'running', 'waiting_for_user', 'needs_review', 'co
 
 
 class RunCreate(Model):
-    kind: Literal['literature_review', 'import', 'report_check', 'export'] = 'literature_review'
+    kind: Literal['literature_review', 'import', 'report_check', 'export', 'paper_read'] = 'literature_review'
     start_at: Literal['plan', 'search', 'analyze'] = 'plan'
     plan_revision_id: str | None = None
     selection_id: str | None = None

@@ -30,6 +30,8 @@ Driver and artifact jobs have owner, attempt and expiring leases. Child jobs use
 
 Immutable records may be created before a stale task loses its lease. Canonical listings therefore follow fenced Run publications and explicit human saves rather than “most recently created” rows. Cancellation blocks later formal publication. Event sequence numbers are durable; the UI deduplicates and resumes HTTP event reads independently of task execution.
 
+Each fenced successful `read_paper` artifact also publishes its matching paper/document extraction, including work committed before a parent run was cancelled. Ordinary Reader errors are isolated per paper: other readings finish, and a partial batch waits for review before report writing. The evidence view polls results and individual statuses independently. Its single-paper retry creates a `paper_read` run with the failed job's frozen inputs; source-level transactional deduplication prevents parallel retries. Generic run actions allow only cancellation for this kind. Version and human-edit guards run before and after reading. This auxiliary run never resumes its parent or calls the Writer.
+
 Model attempts are reserved transactionally before dispatch. The legacy helper retains its default retry behavior for existing callers; ScholarFlow uses one helper attempt and disables known SDK retries, leaving audited retries to jobs. OpenAI-compatible, Azure OpenAI, Anthropic and Ollama are the enabled new gateway adapters. Unknown token usage/prices remain unknown. An uncommitted response may be repeated after a crash and incur additional billing.
 
 ## Boundaries

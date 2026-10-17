@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 const id = '[A-Za-z0-9_-]+';
-const routes = new RegExp(`^(?:status|projects(?:/${id}(?:/(?:plans(?:/${id}/approve)?|papers(?:/${id})?|selections|runs|imports|extractions(?:/${id})?|reports))?)?|papers/${id}/versions|documents/${id}(?:/(?:file|passages))?|runs/${id}(?:/(?:jobs|actions|events))?|claims/${id}/evidence|evidence/${id}/reviews|reports/${id}(?:/(?:checks|exports|citation-options))?|exports/${id}/file|imports/${id})$`);
+const routes = new RegExp(`^(?:status|projects(?:/${id}(?:/(?:plans(?:/${id}/approve)?|papers(?:/${id})?|selections|runs|imports|extractions(?:/${id})?|reports|reading-status|reading-retries))?)?|papers/${id}/versions|documents/${id}(?:/(?:file|passages))?|runs/${id}(?:/(?:jobs|actions|events))?|claims/${id}/evidence|evidence/${id}/reviews|reports/${id}(?:/(?:checks|exports|citation-options))?|exports/${id}/file|imports/${id})$`);
 async function proxy(request: NextRequest, { params }: { params: { path: string[] } }) {
   const path = params.path.join('/');
   if (!routes.test(path)) return NextResponse.json({ error: { code: 'invalid_path', message: '未知科研接口' } }, { status: 404 });

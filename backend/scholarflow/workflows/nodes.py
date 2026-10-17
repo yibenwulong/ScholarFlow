@@ -242,14 +242,29 @@ class ResearchNodes:
             async def operation():
                 result = await self.s.extractions.extract(run.id, entry['paper_version_id'], entry['document_version_ids'])
                 return {'extraction_id': result.id}
-            return await self.artifact(state, 'read_paper', {'paper_version_id': entry['paper_version_id'],
-                'document_ids': entry['document_version_ids'], 'snapshot': run.request_snapshot}, operation)
+            try:
+                return await self.artifact(state, 'read_paper', {'paper_version_id': entry['paper_version_id'],
+                    'document_ids': entry['document_version_ids'], 'snapshot': run.request_snapshot}, operation)
+            except ScholarError as error:
+                if error.code in {'lease_lost', 'run_cancelled', 'model_budget_exhausted', 'task_busy'}:
+                    raise
+                return {'failed_paper_version_id': entry['paper_version_id']}
         tasks = []
         async with asyncio.TaskGroup() as group:
             for entry in run.manifests['documents']['papers']:
                 if entry['document_version_ids']:
                     tasks.append(group.create_task(extract(entry)))
-        ids = [task.result()['extraction_id'] for task in tasks]
+        results = [task.result() for task in tasks]
+        ids = [result['extraction_id'] for result in results if 'extraction_id' in result]
+        failed_ids = [result['failed_paper_version_id'] for result in results if 'failed_paper_version_id' in result]
+        if failed_ids:
+            self.current(state)
+            self.store.update_run(run.id, {'status': 'needs_review', 'pending_action': {
+                'type': 'paper_read_failures', 'failed_paper_version_ids': failed_ids}, 'issues': [{
+                    'code': 'paper_read_failed',
+                    'message': f'{len(ids)} 篇论文已完成阅读，{len(failed_ids)} 篇失败；请到证据与矩阵查看结果并逐篇重试。'}]},
+                expected_generation=state['generation'])
+            return {'stage': 'stop'}
         if not ids:
             self.store.update_run(run.id, {'status': 'needs_review', 'pending_action': {'type': 'documents_required'},
                 'issues': [{'code': 'no_usable_text', 'message': 'No selected paper has usable source text'}]}, expected_generation=state['generation'])

@@ -40,7 +40,7 @@ export default function ProjectWorkspace({ projectId }: { projectId: string }) {
     {tab === 'plan' && <PlanPanel project={project} plans={plans} run={researchRun} hasActiveRun={hasActiveResearch} onRefresh={refresh} />}
     {tab === 'papers' && <LibraryPanel projectId={projectId} papers={papers} selections={selections} plans={plans} runs={runs} onRefresh={refresh} />}
     {tab === 'evidence' && <EvidencePanel projectId={projectId} paperId={search.get('paper') || papers[0]?.paper_id || ''} papers={papers}
-      claimId={search.get('claim') || undefined} evidenceId={search.get('evidence') || undefined} />}
+      claimId={search.get('claim') || undefined} evidenceId={search.get('evidence') || undefined} onRefresh={refresh} />}
     {tab === 'report' && <ReportPanel projectId={projectId} runs={runs} onRefresh={refresh} />}
     <RunPanel run={progressRun} onRefresh={refresh} />
   </div>;

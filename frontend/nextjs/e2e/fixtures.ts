@@ -61,6 +61,7 @@ export async function mockWorkspace(page: Page, options: { conflict?: boolean; s
     if (path === '/runs/run1/events') return respond({ items: [], next_cursor: null });
     if (path === '/runs/run1/jobs') return respond({ items: [], model_calls: [], cost: null });
     if (path === '/projects/p1/reports' || path === '/projects/p1/extractions') return respond({ items: [] });
+    if (path === '/projects/p1/reading-status' && method === 'GET') return respond({ items: [] });
     return respond({ error: { code: 'fixture_route_missing', message: method + ' ' + path } }, 404);
   });
   return state;
