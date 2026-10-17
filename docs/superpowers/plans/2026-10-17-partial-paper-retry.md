@@ -64,7 +64,15 @@
 ## Integration and Delivery
 
 - [x] Review the combined change and run the complete ScholarFlow backend suite once the implementation is stable.
-- [ ] Build the production frontend; preserve local data and credentials.
-- [ ] Restart only this checkout's verified services when no task is running.
-- [ ] Read-only smoke check: the historical 17 successes remain visible, and the latest 20-paper run displays 19 successes and one failure. Do not click retry.
-- [ ] Commit and normally push source/tests/documentation to the user's existing GitHub repository; never include local papers or diagnostic data.
+- [x] Build the production frontend; preserve local data and credentials.
+- [x] Restart only this checkout's verified services when no task is running.
+- [x] Read-only smoke check: the historical 17 successes remain visible, and the latest 20-paper run displays 19 successes and one failure. Do not click retry.
+- [x] Commit and normally push source/tests/documentation to the user's existing GitHub repository; never include local papers or diagnostic data.
+
+## Recorded Verification
+
+- Backend baseline: 152 passed. Implemented batch/API suite: 183 passed. The subsequent generic-action guard passed its 29 related cases, including four new bypass regressions.
+- Browser regression: 89 passed, one mobile duplicate-proxy check skipped; the final legacy-reading compatibility and run regressions passed 56 cases. TypeScript, lint and the production build passed.
+- Read-only deployed API/browser checks: 19 successful readings, one failed paper, 19 matrix rows and one eligible single-paper retry button. All 17 historical successful paper versions remain visible; the old cancelled parent stays cancelled.
+- No write requests were made by the browser smoke test. Recorded model attempts remained 85 across deployment and verification. No live retry was submitted.
+- Database backups were made with the verified local services stopped. The source was pushed to the existing ScholarFlow main branch; credentials, papers, logs and generated PWA files were excluded.
