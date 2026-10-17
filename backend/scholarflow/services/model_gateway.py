@@ -99,6 +99,8 @@ class ModelGateway:
         if config.provider not in {'openai', 'azure_openai', 'anthropic', 'ollama'}:
             raise ScholarError(422, 'unsupported_model_provider', 'ScholarFlow supports openai, azure_openai, anthropic and ollama')
         options = {'max_retries': 0} if config.provider != 'ollama' else {'num_predict': config.max_tokens}
+        if request.purpose == 'write_report' and config.provider in {'openai', 'azure_openai'}:
+            options['model_kwargs'] = {'response_format': {'type': 'json_object'}}
         metadata = {}
         def capture(event):
             metadata.update(event)

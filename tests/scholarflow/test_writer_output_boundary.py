@@ -95,6 +95,8 @@ async def test_writer_receives_actual_claim_evidence_pairs_not_array_position_gu
     pairs = inputs['extractions'][0]['fields']['method']['citation_pairs']
     assert {(pair['claim_revision_id'], pair['evidence_id']) for pair in pairs} == {
         (claim.id, evidence.id), (other_claim.id, other_evidence.id)}
+    assert 'claim_ids' not in inputs['extractions'][0]['fields']['method']
+    assert 'evidence_ids' not in inputs['extractions'][0]['fields']['method']
 
 
 @pytest.mark.asyncio

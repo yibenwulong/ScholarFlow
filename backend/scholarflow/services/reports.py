@@ -110,6 +110,7 @@ class ReportService:
                     evidence = self.records.get('evidence', evidence_id, Evidence)
                     if evidence.claim_revision_id in field['claim_ids']:
                         pairs.append({'claim_revision_id': evidence.claim_revision_id, 'evidence_id': evidence.id})
+                del field['claim_ids'], field['evidence_ids']
                 field['citation_pairs'] = pairs
             inputs.append({'key': key, 'paper_version_id': paper.id, 'fields': fields})
             coverage['read_paper_version_ids'].append(paper.id)

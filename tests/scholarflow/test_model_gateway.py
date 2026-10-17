@@ -194,6 +194,31 @@ async def test_adapter_disables_sdk_retries_and_preserves_unknown_usage(job_cont
     assert response.usage is None
     assert response.provider_request_id == 'test-request'
     assert response.finish_reason == 'length'
+    assert 'response_format' not in options.get('model_kwargs', {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('provider', ['openai', 'azure_openai'])
+async def test_writer_uses_provider_json_mode_in_single_counted_attempt(job_context, monkeypatch, provider):
+    from gpt_researcher.utils import llm
+    from backend.scholarflow.domain.runs import Run
+    store, original = job_context
+    run = Run(project_id=original.project_id, request_snapshot={'model': {'provider': provider, 'model': 'fixture'}})
+    store.records.insert('run', run, project_id=run.project_id)
+    observed = []
+    async def helper(messages, **kwargs):
+        observed.append(kwargs)
+        return '{"title":"Report","blocks":[]}'
+    monkeypatch.setattr(llm, 'create_chat_completion', helper)
+    await ModelGateway(store.db).complete(ModelRequest(run_id=run.id, purpose='write_report',
+        messages=[{'role': 'system', 'content': 'Return JSON.'}]))
+    assert len(observed) == 1
+    assert observed[0]['llm_kwargs']['model_kwargs']['response_format'] == {'type': 'json_object'}
+    assert observed[0]['llm_kwargs']['max_retries'] == 0
+    assert observed[0]['max_attempts'] == 1
+    with store.db.transaction(write=False) as conn:
+        calls = conn.execute('SELECT status FROM model_calls WHERE run_id=?', (run.id,)).fetchall()
+    assert len(calls) == 1 and calls[0]['status'] == 'succeeded'
 
 
 @pytest.mark.asyncio

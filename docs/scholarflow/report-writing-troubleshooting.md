@@ -24,6 +24,8 @@ API 与 worker 分别使用不同终端时，需分别设置。已有环境变�
 
 Writer 现在把冻结的 `max_tokens` 作为输入预算，要求紧凑 JSON、精简正文和代表性引用；提供程序生成的合法结论/证据配对，避免从两组 ID 的位置猜测对应关系。该预算是模型生成约束，不能保证模型每次遵守。
 
+Writer 使用 OpenAI 兼容或 Azure OpenAI 适配器时，还显式发送 `response_format={"type":"json_object"}`，而非只在提示词中要求 JSON。DashScope 千问支持这一模式，参见 [阿里云结构化输出文档](https://www.alibabacloud.com/help/zh/model-studio/qwen-structured-output)。兼容服务仍需支持该参数；返回不支持错误时不会隐藏移除参数再发一次请求。其他适配器继续严格校验返回文本。JSON 模式也不能代替长度、结构、引用来源与语义支持检查。
+
 网关保留供应商的结束原因。遇到 `length` 或 `max_tokens` 时，保存带校验哈希的原始响应审计，返回 `writer_output_truncated`，不拼接缺失内容、不伪造引用、不自动加大 token 上限或隐藏重发。结束原因未知时保持未知，仍按原有 JSON 和引用规则校验。
 
 ## 已有报告但仍待复核

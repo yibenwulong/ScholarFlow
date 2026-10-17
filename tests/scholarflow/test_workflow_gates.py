@@ -34,7 +34,8 @@ class ResearchModel:
             text = 'The method uses a graph.'
             output = {'title': 'Research report', 'blocks': [{'id': 'method', 'heading': 'Methods',
                 'text': text + f" [@{entry['key']}]", 'claims': [{'start': 0, 'end': len(text), 'token_index': 0,
-                    'claim_revision_ids': field['claim_ids'], 'evidence_ids': field['evidence_ids']}]}]}
+                    'claim_revision_ids': list(dict.fromkeys(pair['claim_revision_id'] for pair in field['citation_pairs'])),
+                    'evidence_ids': [pair['evidence_id'] for pair in field['citation_pairs']]}]}]}
         elif request.purpose == 'verify_claim':
             output = {'status': 'conflicting' if self.conflict else 'supported', 'reason': 'Fixture support assessment'}
         else:

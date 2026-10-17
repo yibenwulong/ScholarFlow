@@ -59,7 +59,8 @@ class DemoModel:
                 text = field['value']
                 blocks.append({'id': 'method-' + str(index), 'heading': '方法比较 · 合成文献 ' + str(index + 1),
                     'text': text + f" [@{entry['key']}]", 'claims': [{'start': 0, 'end': len(text), 'token_index': 0,
-                        'claim_revision_ids': field['claim_ids'], 'evidence_ids': field['evidence_ids']}]})
+                        'claim_revision_ids': list(dict.fromkeys(pair['claim_revision_id'] for pair in field['citation_pairs'])),
+                        'evidence_ids': [pair['evidence_id'] for pair in field['citation_pairs']]}]})
             output = {'title': 'ScholarFlow 合成文献演示报告', 'blocks': blocks}
         elif request.purpose == 'verify_claim':
             output = {'status': 'supported' if inputs['claim'].strip() == 'The method uses a graph.' else 'needs_recheck',
