@@ -36,6 +36,8 @@ The Reader requires every comparison field to be checked, with an explicit missi
 
 Reading extracts facts from the selected paper independently of the project's topic. The model receives numbered, contiguous source units and selects their IDs for each claim. The server creates a separate evidence item for each selected unit using its exact original text and character offsets. It never asks the model to reconstruct or join quotation text. Unknown unit IDs are rejected. Source location is deterministic; whether a claim is supported by those sources still requires semantic review.
 
+Reader compatibility handling separates an unbound absence entry from a scientific claim only when the same field already has an explicit missing reason. It never invents a value or source anchor. A response rejected by an earlier parser can be revalidated inside a new leased batch operation only when a failed batch job and its original audit match the complete frozen input. The original audit remains unchanged; the new audit links to it and records normalization steps. Publication still requires the new batch and paper artifacts to finish under their ownership fences.
+
 Model attempts are reserved transactionally before dispatch. The legacy helper retains its default retry behavior for existing callers; ScholarFlow uses one helper attempt and disables known SDK retries, leaving audited retries to jobs. OpenAI-compatible, Azure OpenAI, Anthropic and Ollama are the enabled new gateway adapters. Unknown token usage/prices remain unknown. An uncommitted response may be repeated after a crash and incur additional billing.
 
 ## Boundaries

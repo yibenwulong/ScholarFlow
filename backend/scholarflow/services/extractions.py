@@ -4,7 +4,7 @@ import re
 from uuid import uuid4
 from typing import Literal
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 from ..domain.common import Model, utcnow
 from ..domain.errors import ScholarError, revision_conflict
@@ -16,14 +16,14 @@ from ..persistence.paper_store import PaperStore
 from ..persistence.run_store import RunStore, fingerprint
 from ..workflows.prompts import FIELD_NAMES, READ_PROMPT
 from ..worker.jobs import ArtifactExecutor
-from .model_gateway import ModelRequest
+from .model_gateway import ModelRequest, ModelResponse
 from .reader_contract import READER_VERSION, reader_inputs
 from .reader_sources import quote_units
 
 
 class Candidate(Model):
     value: str = Field(min_length=1)
-    quote_ids: list[str] = Field(min_length=1, max_length=4)
+    quote_ids: list[str] = Field(min_length=1)
     relation: Literal['supports', 'refutes', 'insufficient'] = 'supports'
 
     @field_validator('value')
@@ -52,6 +52,7 @@ class ReaderFields(Model):
 class ReaderOutput(Model):
     fields: ReaderFields
     missing_reasons: dict[str, str] = Field(default_factory=dict)
+    _normalizations: list[dict] = PrivateAttr(default_factory=list)
 
     @model_validator(mode='after')
     def checked_fields(self):
@@ -73,6 +74,41 @@ def reader_diagnostics(error):
     known = set(FIELD_NAMES) | {'fields', 'missing_reasons', 'value', 'quote_ids', 'relation'}
     return [{'loc': [part if isinstance(part, int) or part in known else '<extra_field>' for part in item['loc']],
              'type': item['type']} for item in error.errors(include_input=False, include_url=False, include_context=False)]
+
+
+def normalize_reader_payload(value):
+    """Only repair explicit missing-data representations, never evidence or facts."""
+    changes = []
+    if not isinstance(value, dict):
+        return value, changes
+    reasons = value.get('missing_reasons')
+    if not isinstance(reasons, dict):
+        return value, changes
+    for name in FIELD_NAMES:
+        reason = reasons.get(name)
+        if isinstance(reason, list) and reason and all(isinstance(part, str) and part.strip() for part in reason):
+            reasons[name] = '; '.join(part.strip() for part in reason)
+            changes.append({'loc': ['missing_reasons', name], 'type': 'reason_list_joined'})
+    fields = value.get('fields')
+    if not isinstance(fields, dict):
+        return value, changes
+    for name in FIELD_NAMES:
+        items, reason = fields.get(name), reasons.get(name)
+        if (not isinstance(items, list) or len(items) > 2
+                or not isinstance(reason, str) or not reason.strip()):
+            continue
+        kept = []
+        for index, item in enumerate(items):
+            if (isinstance(item, dict) and set(item) <= {'value', 'quote_ids', 'relation'}
+                    and isinstance(item.get('value'), str) and item['value'].strip()
+                    and item.get('quote_ids') == []
+                    and isinstance(item.get('relation', 'supports'), str)
+                    and item.get('relation', 'supports') in {'supports', 'refutes', 'insufficient', 'missing'}):
+                changes.append({'loc': ['fields', name, index], 'type': 'unanchored_missing_removed'})
+            else:
+                kept.append(item)
+        fields[name] = kept
+    return value, changes
 
 
 class ExtractionService:
@@ -98,7 +134,14 @@ class ExtractionService:
     @staticmethod
     def _output(raw, units):
         text, _ = reader_json_text(raw)
-        output = ReaderOutput.model_validate_json(text)
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            # Preserve Pydantic's existing safe JSON diagnostics.
+            return ReaderOutput.model_validate_json(text)
+        value, normalizations = normalize_reader_payload(value)
+        output = ReaderOutput.model_validate(value)
+        output._normalizations = normalizations
         allowed = {unit['quote_id'] for unit in units}
         for name in FIELD_NAMES:
             for index, candidate in enumerate(getattr(output.fields, name)):
@@ -125,9 +168,55 @@ class ExtractionService:
                     or audit.reader_version != READER_VERSION or audit.diagnostics
                     or audit.sha256 != hashlib.sha256(audit.raw_text.encode('utf-8')).hexdigest()):
                 raise ValueError('Mismatched audit provenance')
-            return self._output(audit.raw_text, units), audit.id, job.id
+            output = self._output(audit.raw_text, units)
+            if [item.model_dump() for item in audit.normalizations] != output._normalizations:
+                raise ValueError('Mismatched normalization metadata')
+            return output, audit.id, job.id
         except (ScholarError, ValidationError, ValueError, TypeError):
             raise ScholarError(409, 'invalid_reader_batch_cache', 'The saved Reader batch does not match its frozen input') from None
+
+    def _recoverable_response(self, manifest, units):
+        """A failed fenced job, not an isolated raw audit, authorizes revalidation."""
+        digest = fingerprint(manifest)
+        with self.db.transaction(write=False) as conn:
+            jobs = conn.execute("SELECT j.id FROM jobs j JOIN entities r ON r.id=j.run_id "
+                "WHERE j.kind='artifact' AND j.stage='read_paper_batch' AND j.status='failed' "
+                "AND j.input_hash=? AND r.kind='run' AND r.project_id=? ORDER BY j.updated_at DESC,j.id DESC",
+                (digest, manifest['_project_id'])).fetchall()
+            if not jobs:
+                return None
+            audits = conn.execute("SELECT payload FROM entities WHERE kind='reader_output_audit' AND project_id=? "
+                "ORDER BY created_at DESC,id DESC", (manifest['_project_id'],)).fetchall()
+            for row in jobs:
+                job = self.runs.get_job(row['id'], conn)
+                if job.input_manifest != manifest or not job.error or job.error.get('code') != 'invalid_model_output':
+                    continue
+                origin = self.runs.get_run(job.run_id, conn)
+                if (origin.status == 'cancelled' or origin.project_id != manifest['_project_id']
+                        or origin.request_snapshot.get('model', {}) != manifest['model']):
+                    continue
+                linked = []
+                for row in audits:
+                    value = json.loads(row['payload'])
+                    if value.get('run_id') == job.run_id and value.get('input_hash') == digest:
+                        linked.append(value)
+                # Historical job errors did not retain an audit ID. Multiple
+                # attempts with the same origin/hash cannot be disambiguated.
+                if len(linked) != 1:
+                    continue
+                try:
+                    audit = ReaderOutputAudit.model_validate(linked[0])
+                    if (audit.project_id != origin.project_id or audit.paper_version_id != manifest['paper_version_id']
+                            or audit.document_version_ids != manifest['document_ids']
+                            or audit.reader_version != READER_VERSION or not audit.diagnostics
+                            or audit.reused_from_audit_id is not None
+                            or audit.sha256 != hashlib.sha256(audit.raw_text.encode('utf-8')).hexdigest()):
+                        continue
+                    self._output(audit.raw_text, units)
+                except (ScholarError, ValidationError, ValueError, TypeError):
+                    continue
+                return audit, job
+        return None
 
     async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch, paper_title):
         units = quote_units(batch)
@@ -152,13 +241,17 @@ class ExtractionService:
             self._batch_result(cached, manifest, units)
 
         async def operation():
-            response = await self.gateway.complete(ModelRequest(run_id=run.id, purpose='read_paper', messages=[
-                {'role': 'system', 'content': READ_PROMPT}, {'role': 'user', 'content': json.dumps({
-                    'paper_title': paper_title, 'language': project.language, 'passages': payload_passages}, ensure_ascii=False)}]))
+            recovered = self._recoverable_response(manifest, units)
+            source = recovered[0] if recovered else None
+            response = (ModelResponse(text=source.raw_text, provider_request_id=source.provider_request_id, usage=source.usage)
+                if source else await self.gateway.complete(ModelRequest(run_id=run.id, purpose='read_paper', messages=[
+                    {'role': 'system', 'content': READ_PROMPT}, {'role': 'user', 'content': json.dumps({
+                        'paper_title': paper_title, 'language': project.language, 'passages': payload_passages}, ensure_ascii=False)}])))
             _, output_format = reader_json_text(response.text)
-            failure, diagnostics = None, []
+            failure, diagnostics, normalizations = None, [], []
             try:
-                self._output(response.text, units)
+                output = self._output(response.text, units)
+                normalizations = output._normalizations
             except ValidationError as error:
                 diagnostics = reader_diagnostics(error)
                 failure = ('invalid_model_output', 'Reader returned invalid structured fields; review this paper')
@@ -169,9 +262,20 @@ class ExtractionService:
                 document_version_ids=manifest['document_ids'], input_hash=digest, reader_version=READER_VERSION, raw_text=response.text,
                 sha256=hashlib.sha256(response.text.encode('utf-8')).hexdigest(),
                 provider_request_id=response.provider_request_id, usage=response.usage,
-                output_format=output_format, diagnostics=diagnostics)
-            self.records.insert('reader_output_audit', audit, project_id=project.id,
-                links=[('run', run.id), ('version', paper_version_id)] + [('document', document.id) for document in documents])
+                output_format=output_format, diagnostics=diagnostics, normalizations=normalizations,
+                reused_from_audit_id=source.id if source else None)
+            with self.db.transaction() as conn:
+                if recovered:
+                    original = self.runs.get_job(recovered[1].id, conn)
+                    origin = self.runs.get_run(source.run_id, conn)
+                    if (original.status != 'failed' or original.run_id != source.run_id
+                            or original.input_hash != digest or original.input_manifest != manifest
+                            or not original.error or original.error.get('code') != 'invalid_model_output'
+                            or origin.status == 'cancelled' or origin.project_id != project.id):
+                        raise ScholarError(409, 'reader_recovery_unavailable', '原阅读任务状态已变化，本次未复用旧响应；请重新检查阅读状态。')
+                self.records.insert('reader_output_audit', audit, project_id=project.id,
+                    links=[('run', run.id), ('version', paper_version_id)] + [('document', document.id) for document in documents]
+                          + ([('reader_output_audit', source.id)] if source else []), conn=conn)
             if failure:
                 raise ScholarError(422, failure[0], failure[1],
                     details={'reader_output_audit_id': audit.id, 'diagnostics': diagnostics}) from None

@@ -132,7 +132,7 @@ async def test_reader_claim_across_two_sources_keeps_both_spans_separate(extract
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('ids', [[], ['Q0001', 'Q0001'], ['Q0001'] * 5])
-async def test_reader_rejects_empty_duplicate_or_excessive_anchor_lists(extraction_context, ids):
+async def test_reader_rejects_empty_or_duplicate_anchor_lists(extraction_context, ids):
     service, run, paper, document = context_service(extraction_context, Reader([anchored_payload(ids)]))
     with pytest.raises(ScholarError) as failure:
         await service.extract(run.id, paper.paper_version_id, [document.id])

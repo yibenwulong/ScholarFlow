@@ -84,3 +84,5 @@ class ReaderOutputAudit(Entity):
     usage: dict | None = None
     output_format: Literal['json', 'json_fence']
     diagnostics: list[ReaderOutputDiagnostic] = Field(default_factory=list)
+    normalizations: list[ReaderOutputDiagnostic] = Field(default_factory=list)
+    reused_from_audit_id: str | None = None
