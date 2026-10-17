@@ -17,7 +17,7 @@ from ..persistence.evidence_store import EvidenceStore
 from ..persistence.report_store import ReportStore
 from ..persistence.run_store import RunStore, fingerprint
 from .citations import citation_tokens, render_citations
-from .model_gateway import ModelConfig, ModelRequest
+from .model_gateway import ModelConfig, ModelRequest, ModelResponse
 from .verification import Verifier
 
 
@@ -39,6 +39,26 @@ def writer_json_text(raw_text):
     text = raw_text.strip().removeprefix('\ufeff').strip()
     fenced = re.fullmatch(r'```(?:json)?[ \t]*\r?\n(.*?)\r?\n```', text, flags=re.DOTALL | re.IGNORECASE)
     return (fenced.group(1), 'json_fence') if fenced else (text, 'json')
+
+
+def normalize_writer_sections(text):
+    """Flatten only explicit, known block-list sections; never repair JSON text."""
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return text, []
+    section_names = ('limitations', 'next_directions', 'appendix')
+    if (not isinstance(payload, dict) or set(payload) - {'title', 'blocks', *section_names}
+            or not isinstance(payload.get('blocks'), list)):
+        return text, []
+    present = [name for name in section_names if name in payload]
+    if not present or any(not isinstance(payload[name], list) for name in present):
+        return text, []
+    blocks = list(payload['blocks'])
+    for name in present:
+        blocks.extend(payload[name])
+    return json.dumps({'title': payload.get('title'), 'blocks': blocks}, ensure_ascii=False), [
+        {'loc': [name], 'type': 'section_blocks_appended'} for name in present]
 
 
 def schema_diagnostics(error, prefix=()):
@@ -95,7 +115,7 @@ class ReportService:
                     'unreadable_paper_version_ids': [p['paper_version_id'] for p in prepared if not p['document_version_ids']],
                     'abstract_only_paper_version_ids': [p['paper_version_id'] for p in prepared if p.get('source_scope') == 'abstract'],
                     'search_results': run.manifests.get('search', {}).get('results', [])}
-        inputs, bindings, documents = [], [], []
+        inputs, bindings, documents, sources = [], [], [], {}
         for extraction_id in extraction_ids:
             extraction = self.records.get('extraction', extraction_id, ExtractionRevision)
             if extraction.project_id != run.project_id:
@@ -113,29 +133,36 @@ class ReportService:
                 del field['claim_ids'], field['evidence_ids']
                 field['citation_pairs'] = pairs
             inputs.append({'key': key, 'paper_version_id': paper.id, 'fields': fields})
+            pairs = [pair for field in fields.values() for pair in field['citation_pairs']]
+            sources[key] = {pair['evidence_id']: pair['claim_revision_id'] for pair in pairs}
             coverage['read_paper_version_ids'].append(paper.id)
             documents.extend(extraction.document_version_ids)
         config = ModelConfig.model_validate(run.request_snapshot.get('model', {}))
         output_budget = {'max_tokens': config.max_tokens, 'max_blocks': 6,
                          'max_body_characters': min(1200, max(40, config.max_tokens // 3)),
                          'max_citation_occurrences': min(8, max(1, config.max_tokens // 450))}
-        response = await self.gateway.complete(ModelRequest(run_id=run.id, purpose='write_report', messages=[
+        request = ModelRequest(run_id=run.id, purpose='write_report', messages=[
             {'role': 'system', 'content': WRITE_PROMPT + '\n' + WRITE_BUDGET_PROMPT}, {'role': 'user', 'content': json.dumps({
                 'question': project.question, 'language': project.language, 'report_type': project.report_type,
                 'extractions': inputs, 'coverage': coverage, 'output_budget': output_budget,
-                'review_feedback': extraction_manifest.get('feedback', [])}, ensure_ascii=False)}]))
+                'review_feedback': extraction_manifest.get('feedback', [])}, ensure_ascii=False)}])
+        cached = self._previous_writer_response(run, request)
+        response, reused_id = cached if cached else (await self.gateway.complete(request), None)
+        audit_options = {'input_hash': fingerprint(request.model_dump()), 'reused_from_audit_id': reused_id}
         text, output_format = writer_json_text(response.text)
         if response.finish_reason in {'length', 'max_tokens'}:
             diagnostics = [{'loc': [], 'type': 'output_token_limit'}]
-            audit = self._audit_writer_output(run, response, output_format, diagnostics)
+            audit = self._audit_writer_output(run, response, output_format, diagnostics, **audit_options)
             raise ScholarError(422, 'writer_output_truncated',
                 '报告输出达到模型长度上限，内容未完成；原文已保留。请缩短报告内容后重试写作，论文阅读结果无需重做。',
                 details={'writer_output_audit_id': audit.id, 'diagnostics': diagnostics})
+        text, normalizations = normalize_writer_sections(text)
+        audit_options['normalizations'] = normalizations
         try:
             output = WriterOutput.model_validate_json(text)
         except ValidationError as error:
             diagnostics = schema_diagnostics(error)
-            audit = self._audit_writer_output(run, response, output_format, diagnostics)
+            audit = self._audit_writer_output(run, response, output_format, diagnostics, **audit_options)
             raise ScholarError(422, 'invalid_model_output', 'Writer returned an invalid report structure',
                                details={'writer_output_audit_id': audit.id, 'diagnostics': diagnostics}) from None
         blocks, writer_issues, diagnostics = [], [], []
@@ -169,6 +196,12 @@ class ReportService:
                     code = 'invalid_claim_binding'
                 elif not 0 <= claim['start'] < claim['end'] <= tokens[index].start():
                     code = 'invalid_claim_span'
+                else:
+                    allowed = sources.get(tokens[index].group(1), {})
+                    if (set(claim['claim_revision_ids']) - set(allowed.values())
+                            or any(eid not in allowed or allowed[eid] not in claim['claim_revision_ids']
+                                   for eid in claim['evidence_ids'])):
+                        code = 'invalid_claim_source'
                 if code:
                     # Keep the generated prose, but never guess its evidence mapping.
                     # Missing bindings remain visible as needs_recheck in check().
@@ -177,21 +210,56 @@ class ReportService:
                 else:
                     claims.append(claim)
             blocks.append(ReportBlock(id=block.id, heading=block.heading, text=block.text, claims=claims))
-        audit = self._audit_writer_output(run, response, output_format, diagnostics)
+        audit = self._audit_writer_output(run, response, output_format, diagnostics, **audit_options)
         return ReportDraft(run_id=run.id, title=output.title, blocks=blocks, bindings=bindings,
                            manifest={'extraction_ids': extraction_ids, 'document_version_ids': list(dict.fromkeys(documents)),
                                      'coverage': coverage, 'output_budget': output_budget,
                                      'writer_issues': writer_issues, 'writer_output_audit_id': audit.id})
 
-    def _audit_writer_output(self, run, response, output_format, diagnostics):
+    def _previous_writer_response(self, run, request):
+        """Reparse the latest schema-failed response only when its exact input is proven."""
+        with self.db.transaction(write=False) as conn:
+            row = conn.execute("SELECT payload FROM entities WHERE kind='writer_output_audit' AND project_id=? "
+                "AND json_extract(payload,'$.run_id')=? ORDER BY created_at DESC,id DESC LIMIT 1",
+                (run.project_id, run.id)).fetchone()
+            if row is None:
+                return None
+            audit = WriterOutputAudit.model_validate_json(row['payload'])
+            input_hash = fingerprint(request.model_dump())
+            if (audit.project_id != run.project_id or audit.run_id != run.id or not audit.provider_request_id
+                    or audit.finish_reason in {'length', 'max_tokens'} or not audit.diagnostics
+                    or (audit.input_hash is not None and audit.input_hash != input_hash)
+                    or any(item.type != 'extra_forbidden' or item.loc != ['<extra_field>'] for item in audit.diagnostics)
+                    or audit.sha256 != hashlib.sha256(audit.raw_text.encode('utf-8')).hexdigest()):
+                return None
+            matched = conn.execute("SELECT usage_json FROM model_calls WHERE run_id=? AND status='succeeded' "
+                "AND request_hash=? AND provider_request_id=?", (run.id, input_hash,
+                                                               audit.provider_request_id)).fetchall()
+            if len(matched) != 1 or json.loads(matched[0]['usage_json'] or 'null') != audit.usage:
+                return None
+            text, _ = writer_json_text(audit.raw_text)
+            text, normalizations = normalize_writer_sections(text)
+            if not normalizations:
+                return None
+            try:
+                WriterOutput.model_validate_json(text)
+            except ValidationError:
+                return None
+            return ModelResponse(text=audit.raw_text, provider_request_id=audit.provider_request_id,
+                usage=audit.usage, finish_reason=audit.finish_reason), audit.id
+
+    def _audit_writer_output(self, run, response, output_format, diagnostics, *, normalizations=None,
+                             input_hash=None, reused_from_audit_id=None):
         # Each response is sealed with its parse diagnostics as an immutable
         # audit entity, independently of whether a report can be saved/published.
         audit = WriterOutputAudit(project_id=run.project_id, run_id=run.id, raw_text=response.text,
             sha256=hashlib.sha256(response.text.encode('utf-8')).hexdigest(),
             provider_request_id=response.provider_request_id, usage=response.usage,
             finish_reason=response.finish_reason,
-            output_format=output_format, diagnostics=diagnostics)
-        return self.records.insert('writer_output_audit', audit, project_id=run.project_id, links=[('run', run.id)])
+            output_format=output_format, diagnostics=diagnostics, normalizations=normalizations or [],
+            parser_version='writer-json-v2', input_hash=input_hash, reused_from_audit_id=reused_from_audit_id)
+        links = [('run', run.id)] + ([('reused_from', reused_from_audit_id)] if reused_from_audit_id else [])
+        return self.records.insert('writer_output_audit', audit, project_id=run.project_id, links=links)
 
     @staticmethod
     def _bibliography(paper):

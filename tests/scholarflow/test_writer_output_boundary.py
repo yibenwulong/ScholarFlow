@@ -7,6 +7,8 @@ import pytest
 from backend.scholarflow.domain.errors import ScholarError
 from backend.scholarflow.domain.evidence import ClaimRevision, Evidence
 from backend.scholarflow.domain.reports import ReportBlock
+from backend.scholarflow.domain.reports import WriterOutputAudit
+from backend.scholarflow.persistence.run_store import fingerprint
 from backend.scholarflow.services.extractions import ExtractionService
 from backend.scholarflow.services.model_gateway import ModelResponse
 from backend.scholarflow.services.reports import ReportService
@@ -112,6 +114,79 @@ async def test_saved_coverage_tracks_citations_removed_and_restored_by_user(writ
     third = service.save(run.project_id, draft, second.revision)
     assert third.manifest['coverage']['cited_paper_version_ids'] == [extraction.paper_version_id]
     assert third.manifest['coverage']['uncited_paper_version_ids'] == []
+
+
+@pytest.mark.asyncio
+async def test_writer_preserves_explicit_section_lists_with_audited_normalization(writer_boundary_context):
+    output = writer_boundary_context[3]
+    for name in ['limitations', 'next_directions', 'appendix']:
+        output[name] = [dict(output['blocks'][0], id=name)]
+    text = json.dumps(output)
+    service, _, run, extraction = writer_service(writer_boundary_context, text)
+    draft = await service.compose(run.id, {'extraction_ids': [extraction.id]})
+    assert [block.id for block in draft.blocks] == ['method', 'limitations', 'next_directions', 'appendix']
+    assert [block.text for block in draft.blocks] == [output['blocks'][0]['text']] * 4
+    audit, = audit_rows(service)
+    assert audit['raw_text'] == text
+    assert {tuple(item['loc']) for item in audit['normalizations']} == {('limitations',), ('next_directions',), ('appendix',)}
+    assert service.save(run.project_id, draft, 0).blocks == draft.blocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mismatch', [None, 'request', 'provider', 'hash', 'usage', 'audit_input'])
+async def test_failed_schema_output_reparse_requires_matching_request_and_immutable_response(writer_boundary_context, mismatch):
+    service, model, run, extraction = writer_service(writer_boundary_context, json.dumps(writer_boundary_context[3]))
+    await service.compose(run.id, {'extraction_ids': [extraction.id]})
+    request = model.requests[0]
+    output = writer_boundary_context[3]
+    output['appendix'] = [dict(output['blocks'][0], id='appendix')]
+    text = json.dumps(output)
+    old = WriterOutputAudit(project_id=run.project_id, run_id=run.id, raw_text=text,
+        sha256='wrong-hash' if mismatch == 'hash' else hashlib.sha256(text.encode()).hexdigest(),
+        provider_request_id='writer-request-fixture', output_format='json', finish_reason='stop',
+        usage={'output_tokens': 999} if mismatch == 'usage' else None,
+        input_hash='wrong-input' if mismatch == 'audit_input' else None,
+        diagnostics=[{'loc': ['<extra_field>'], 'type': 'extra_forbidden'}])
+    service.records.insert('writer_output_audit', old, project_id=run.project_id)
+    with service.db.transaction() as conn:
+        conn.execute('INSERT INTO model_calls(id,run_id,request_hash,status,provider_request_id,created_at) VALUES (?,?,?,?,?,?)',
+            ('fixture-call', run.id, 'wrong-request' if mismatch == 'request' else fingerprint(request.model_dump()),
+             'succeeded', 'wrong-provider' if mismatch == 'provider' else old.provider_request_id, old.created_at.isoformat()))
+    draft = await service.compose(run.id, {'extraction_ids': [extraction.id]})
+    latest = next(audit for audit in audit_rows(service) if audit['id'] == draft.manifest['writer_output_audit_id'])
+    if mismatch is None:
+        assert len(model.requests) == 1
+        assert latest['reused_from_audit_id'] == old.id
+        assert latest['raw_text'] == old.raw_text
+        assert [block.id for block in draft.blocks] == ['method', 'appendix']
+    else:
+        assert len(model.requests) == 2
+        assert latest.get('reused_from_audit_id') is None
+    with service.db.transaction(write=False) as conn:
+        assert conn.execute('SELECT count(*) FROM model_calls').fetchone()[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_real_input_ids_from_another_paper_cannot_bind_this_citation(writer_boundary_context):
+    from backend.scholarflow.domain.library import PaperCandidate, SourceRecord
+    documents, run, extraction, output = writer_boundary_context
+    other = documents.library.import_candidates(run.project_id, [PaperCandidate(
+        title='Another paper', source='local', source_id='other', abstract='The method uses a graph.')])[0]
+    source = next(row for row in documents.store.records.list('source_record', SourceRecord) if row.source_id == 'other')
+    document = documents.import_abstract(other.paper_version_id, 'The method uses a graph.', source.id)
+    documents.parse(document.id)
+    other_extraction = await ExtractionService(documents.db, FakeModel()).extract(run.id, other.paper_version_id, [document.id])
+    field = other_extraction.fields['method']
+    output['blocks'][0]['claims'][0].update(claim_revision_ids=field.claim_ids, evidence_ids=field.evidence_ids)
+    service, _, _, _ = writer_service(writer_boundary_context, json.dumps(output))
+    draft = await service.compose(run.id, {'extraction_ids': [extraction.id, other_extraction.id]})
+    assert draft.blocks[0].claims == []
+    assert draft.manifest['writer_issues'][0]['code'] == 'invalid_claim_source'
+    saved = service.save(run.project_id, draft, 0)
+    unsafe = draft.model_copy(update={'blocks': [ReportBlock(**output['blocks'][0])]})
+    with pytest.raises(ScholarError) as failure:
+        service.save(run.project_id, unsafe, saved.revision)
+    assert failure.value.code == 'citation_source_mismatch'
 
 
 @pytest.mark.asyncio
@@ -282,12 +357,22 @@ async def test_writer_boundary_keeps_unknown_source_guards(writer_boundary_conte
         block['claims'][0]['evidence_ids'] = ['not-an-input-evidence']
     service, model, run, extraction = writer_service(writer_boundary_context, json.dumps(output))
     draft = await service.compose(run.id, {'extraction_ids': [extraction.id]})
-    with pytest.raises(ScholarError) as failure:
-        service.save(run.project_id, draft, 0)
-    assert failure.value.code == ('unknown_citation_key' if unknown == 'citation_key' else 'unknown_evidence')
     assert draft.blocks[0].text == block['text']
-    assert draft.blocks[0].claims == block['claims']
-    assert service.store.list(run.project_id) == []
+    if unknown == 'citation_key':
+        with pytest.raises(ScholarError) as failure:
+            service.save(run.project_id, draft, 0)
+        assert failure.value.code == 'unknown_citation_key'
+    else:
+        assert draft.blocks[0].claims == []
+        assert draft.manifest['writer_issues'][0]['code'] == 'invalid_claim_source'
+        saved = service.save(run.project_id, draft, 0)
+        assert saved.occurrences[0].evidence_ids == []
+        assert (await service.check(saved.id)).quality_status == 'issues_present'
+        # Canonical/API-style saves retain their strict source validation.
+        unsafe = draft.model_copy(update={'blocks': [ReportBlock(**block)]})
+        with pytest.raises(ScholarError) as failure:
+            service.save(run.project_id, unsafe, saved.revision)
+        assert failure.value.code == 'unknown_evidence'
     assert len(model.requests) == 1
 
 

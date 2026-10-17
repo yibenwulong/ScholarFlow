@@ -89,3 +89,6 @@ class WriterOutputAudit(Entity):
     output_format: Literal['json', 'json_fence']
     parser_version: str = 'writer-json-v1'
     diagnostics: list[WriterOutputDiagnostic] = Field(default_factory=list)
+    normalizations: list[WriterOutputDiagnostic] = Field(default_factory=list)
+    input_hash: str | None = None
+    reused_from_audit_id: str | None = None
