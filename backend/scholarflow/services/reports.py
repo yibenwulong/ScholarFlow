@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, ValidationError
@@ -69,8 +70,28 @@ class ReportService:
             output = WriterOutput.model_validate_json(response.text)
         except (ValueError, ValidationError):
             raise ScholarError(422, 'invalid_model_output', 'Writer returned an invalid report structure') from None
-        return ReportDraft(run_id=run.id, **output.model_dump(), bindings=bindings,
-                           manifest={'extraction_ids': extraction_ids, 'document_version_ids': list(dict.fromkeys(documents)), 'coverage': coverage})
+        blocks, writer_issues = [], []
+        for block in output.blocks:
+            tokens = citation_tokens(block.text)
+            counts = Counter(claim['token_index'] for claim in block.claims)
+            claims = []
+            for claim in block.claims:
+                index = claim['token_index']
+                code = None
+                if index >= len(tokens) or counts[index] != 1:
+                    code = 'invalid_claim_binding'
+                elif not 0 <= claim['start'] < claim['end'] <= tokens[index].start():
+                    code = 'invalid_claim_span'
+                if code:
+                    # Keep the generated prose, but never guess its evidence mapping.
+                    # Missing bindings remain visible as needs_recheck in check().
+                    writer_issues.append({'block_id': block.id, 'token_index': index, 'code': code})
+                else:
+                    claims.append(claim)
+            blocks.append(block.model_copy(update={'claims': claims}))
+        return ReportDraft(run_id=run.id, title=output.title, blocks=blocks, bindings=bindings,
+                           manifest={'extraction_ids': extraction_ids, 'document_version_ids': list(dict.fromkeys(documents)),
+                                     'coverage': coverage, 'writer_issues': writer_issues})
 
     @staticmethod
     def _bibliography(paper):

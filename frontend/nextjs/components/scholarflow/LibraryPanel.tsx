@@ -1,27 +1,42 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import type { Decision, Plan, ProjectPaper, Run, Selection } from '@/types/scholarflow';
 import { decisionLabels } from '@/types/scholarflow';
 import { api, keyFor, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
+import { activeAnalysis, awaitingSelection } from '@/lib/scholarflow/runs';
 
-export default function LibraryPanel({ projectId, papers, selections, plans, run, onRefresh }: {
-  projectId: string; papers: ProjectPaper[]; selections: Selection[]; plans: Plan[]; run?: Run; onRefresh: () => Promise<void>;
+export default function LibraryPanel({ projectId, papers, selections, plans, runs, onRefresh }: {
+  projectId: string; papers: ProjectPaper[]; selections: Selection[]; plans: Plan[]; runs: Run[]; onRefresh: () => Promise<void>;
 }) {
   const [selected, setSelected] = useState<string[]>(selections[0]?.paper_version_ids || []), [dirty, setDirty] = useState(false);
   const [filter, setFilter] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false);
   const [identifier, setIdentifier] = useState('');
   const [limit, setLimit] = useState(20);
+  const [submittedRuns, setSubmittedRuns] = useState<Run[]>([]);
+  const submitting = useRef(false);
+  const approved = plans.find(plan => plan.approved);
+  const knownRuns = [...runs, ...submittedRuns.filter(local => !runs.some(run => run.id === local.id))];
+  const analyzing = activeAnalysis(knownRuns, projectId, approved?.id, selected);
   useEffect(() => { scholarRequest<{ max_included_papers: number }>('/status').then(status => { if (status.max_included_papers > 0) setLimit(status.max_included_papers); }).catch(() => {}); }, []);
   useEffect(() => { if (!dirty) setSelected(selections[0]?.paper_version_ids || []); }, [selections, dirty]);
+  useEffect(() => { setSubmittedRuns(previous => previous.some(local => runs.some(run => run.id === local.id))
+    ? previous.filter(local => !runs.some(run => run.id === local.id)) : previous); }, [runs]);
   async function perform(operation: () => Promise<void>) { setBusy(true); setError(''); try { await operation(); } catch (failure) { setError(messageFor(failure)); } finally { setBusy(false); } }
   async function analyze() {
-    const approved = plans.find(plan => plan.approved);
-    if (!approved) throw new Error('请先批准检索计划，再分析纳入文献。');
-    const snapshot = await scholarRequest<Selection>(`/projects/${projectId}/selections`, write('POST', {
-      expected_revision: selections[0]?.revision || 0, paper_version_ids: selected }, keyFor()));
-    if (run?.status === 'waiting_for_user' && run.pending_action?.type === 'confirm_selection') await api.action(run, 'continue', { selection_id: snapshot.id });
-    else await api.start(projectId, { start_at: 'analyze', plan_revision_id: approved.id, selection_id: snapshot.id });
-    setDirty(false); setNotice('纳入集合已确认，分析任务已创建'); await onRefresh();
+    if (submitting.current) return;
+    submitting.current = true;
+    try {
+      if (!approved) throw new Error('请先批准检索计划，再分析纳入文献。');
+      if (activeAnalysis(knownRuns, projectId, approved.id, selected)) return;
+      const snapshot = await scholarRequest<Selection>(`/projects/${projectId}/selections`, write('POST', {
+        expected_revision: selections[0]?.revision || 0, paper_version_ids: selected }, keyFor()));
+      const waiting = awaitingSelection(runs, projectId, approved.id);
+      const started = waiting ? await api.action(waiting, 'continue', { selection_id: snapshot.id })
+        : await api.start(projectId, { start_at: 'analyze', plan_revision_id: approved.id, selection_id: snapshot.id });
+      setSubmittedRuns(previous => [...previous.filter(run => run.id !== started.id), started]);
+      setDirty(false); setNotice('纳入集合已确认，分析任务已创建'); await onRefresh();
+    } finally { submitting.current = false; }
   }
   async function upload(file: File, versionId?: string) {
     const body = new FormData(); body.append('file', file); if (versionId) body.append('paper_version_id', versionId);
@@ -30,12 +45,18 @@ export default function LibraryPanel({ projectId, papers, selections, plans, run
   }
   return <div className="sf-stack"><section className="sf-card"><div className="sf-between"><div><h2>文献库与人工纳排</h2><p className="sf-muted">AI 建议供你参考。只确认本次明确选择的文献，其他待决定候选会保留。</p></div><span className="sf-badge">{papers.length} 篇候选</span></div>
     {error && <p role="alert" className="sf-error" style={{ marginTop: 14 }}>{error}</p>}{notice && <p role="status" className="sf-notice" style={{ marginTop: 14 }}>{notice}</p>}
+    {analyzing && <div id="analysis-status" role="status" className="sf-notice" style={{ marginTop: 14 }}><p>{analyzing.status === 'running'
+      ? '正在分析这组文献，请查看下方运行进度，无需重复提交。' : '这组文献的分析已排队，请等待当前任务完成，无需重复提交。'}</p>
+      <div className="sf-row" style={{ marginTop: 10 }}><Link className="sf-button" href={`/projects/${projectId}?tab=evidence`}>查看证据与矩阵</Link>
+        <Link className="sf-button" href={`/projects/${projectId}?tab=report`}>查看研究报告</Link></div></div>}
     <div className="sf-grid" style={{ marginTop: 18 }}><div><label htmlFor="paper-filter">筛选文献</label><input id="paper-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder="标题或作者" /></div>
       <div><label htmlFor="pdf-upload">导入 PDF</label><input id="pdf-upload" type="file" accept="application/pdf,.pdf" disabled={busy} onChange={e => { const file = e.target.files?.[0]; if (file) void perform(() => upload(file)); e.target.value = ''; }} /></div></div>
     <details style={{ marginTop: 18 }}><summary>通过 DOI 或 arXiv 标识导入</summary><label htmlFor="identifier">DOI / arXiv 标识</label><div className="sf-row"><input id="identifier" value={identifier} onChange={e => setIdentifier(e.target.value)} placeholder="10.xxxx/… 或 2401.12345v1" style={{ flex: 1 }} />
       <button disabled={busy || !identifier.trim()} onClick={() => void perform(async () => { const value = identifier.trim(); await scholarRequest(`/projects/${projectId}/imports`, write('POST', { identifiers: value.includes('10.') ? { doi: value } : { arxiv: value } }, keyFor())); setNotice('标识导入任务已创建'); setIdentifier(''); await onRefresh(); })}>导入标识</button></div></details>
     <div className="sf-between" style={{ marginTop: 22, paddingTop: 18, borderTop: '1px solid #e4e9f2' }}><span className="sf-muted">本次选择 <strong style={{ color: '#2855d9' }}>{selected.length}</strong> 篇 · 最多 {limit} 篇</span>
-      <button className="sf-primary" disabled={busy || !selected.length || selected.length > limit} onClick={() => void perform(analyze)}>确认纳入并分析</button></div>
+      <button className="sf-primary" aria-label="确认纳入并分析" aria-describedby={analyzing ? 'analysis-status' : undefined}
+        disabled={busy || !!analyzing || !selected.length || selected.length > limit} onClick={() => void perform(analyze)}>{analyzing
+          ? analyzing.status === 'running' ? '正在分析此集合' : '分析任务排队中' : '确认纳入并分析'}</button></div>
   </section>
     {papers.filter(paper => (paper.version.title + paper.version.authors.join(' ')).toLowerCase().includes(filter.toLowerCase())).map(paper => <PaperRow key={paper.id} paper={paper}
       selected={selected.includes(paper.paper_version_id)} onSelect={checked => { setDirty(true); setSelected(values => checked ? [...values, paper.paper_version_id] : values.filter(id => id !== paper.paper_version_id)); }}

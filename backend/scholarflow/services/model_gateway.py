@@ -2,6 +2,8 @@
 import json
 from uuid import uuid4
 
+import httpcore
+import httpx
 from pydantic import Field
 
 from ..domain.common import Model, utcnow
@@ -65,13 +67,24 @@ class ModelGateway:
                 conn.execute("UPDATE model_calls SET status='failed' WHERE id=?", (call_id,))
             if isinstance(exc, ScholarError):
                 raise
-            root = exc
-            while root.__cause__ is not None:
-                root = root.__cause__
-            status = getattr(root, 'status_code', None)
-            retryable = isinstance(root, (TimeoutError, ConnectionError)) or status == 429 or (isinstance(status, int) and status >= 500)
-            # HTTPX/OpenAI transport exception types differ; retain only safe type names.
-            retryable |= any(word in type(root).__name__.lower() for word in ('timeout', 'connection', 'connecterror'))
+            chain, seen = [], set()
+            current = exc
+            while current is not None and id(current) not in seen:
+                seen.add(id(current))
+                chain.append(current)
+                current = current.__cause__
+            root = chain[-1]
+            statuses = [getattr(error, 'status_code', getattr(getattr(error, 'response', None), 'status_code', None))
+                        for error in chain]
+            # Wrappers may carry the HTTP status while the transport failure is
+            # deeper. Inspect both, without retaining exception URLs or messages.
+            retryable = any(isinstance(error, (TimeoutError, ConnectionError, httpx.RemoteProtocolError, httpcore.RemoteProtocolError))
+                            or any(word in type(error).__name__.lower() for word in ('timeout', 'connection', 'connecterror'))
+                            for error in chain)
+            retryable |= any(status == 429 or (isinstance(status, int) and status >= 500) for status in statuses)
+            if (any(isinstance(error, (httpx.LocalProtocolError, httpcore.LocalProtocolError)) for error in chain)
+                    or any(isinstance(status, int) and 400 <= status < 500 and status != 429 for status in statuses)):
+                retryable = False
             raise ScholarError(502, 'model_request_failed', f'Model request failed ({type(root).__name__})', retryable=retryable) from None
         with self.db.transaction() as conn:
             conn.execute("UPDATE model_calls SET status='succeeded',provider_request_id=?,usage_json=? WHERE id=?",

@@ -1,3 +1,6 @@
+import httpcore
+import httpx
+import openai
 import pytest
 
 from backend.scholarflow.domain.errors import ScholarError
@@ -35,6 +38,92 @@ async def test_failed_dispatch_is_counted_and_errors_do_not_persist_secrets(job_
     assert error.value.retryable
     assert 'should-not-persist' not in str(error.value)
     assert store.get_run(run.id).model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('transport_error,retryable', [
+    (httpx.RemoteProtocolError, True),
+    (httpcore.RemoteProtocolError, True),
+    (httpx.LocalProtocolError, False),
+    (httpcore.LocalProtocolError, False),
+])
+async def test_wrapped_transport_failure_preserves_retry_policy_and_safe_audit(job_context, transport_error, retryable):
+    store, run = job_context
+    url = 'https://model.invalid/v1/chat/completions?api_key=fixture-secret'
+    calls = 0
+    async def dispatch(request):
+        nonlocal calls
+        calls += 1
+        connection_error = openai.APIConnectionError(request=httpx.Request('POST', url))
+        connection_error.__cause__ = transport_error(url)
+        raise RuntimeError('Helper request failed') from connection_error
+    gateway = ModelGateway(store.db, dispatch=dispatch)
+    with pytest.raises(ScholarError) as error:
+        await gateway.complete(ModelRequest(run_id=run.id, purpose='write_report', messages=[]))
+    assert error.value.code == 'model_request_failed'
+    assert error.value.retryable is retryable
+    assert calls == 1
+    assert store.get_run(run.id).model_calls == 1
+    with store.db.transaction(write=False) as conn:
+        rows = [dict(row) for row in conn.execute('SELECT * FROM model_calls WHERE run_id=?', (run.id,))]
+    assert [row['status'] for row in rows] == ['failed']
+    assert 'fixture-secret' not in str(error.value) + str(rows)
+    assert 'https://' not in str(error.value) + str(rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,retryable', [(400, False), (401, False), (429, True), (500, True), (503, True)])
+async def test_wrapped_http_failure_uses_status_before_the_innermost_cause(job_context, status, retryable):
+    store, run = job_context
+    request = httpx.Request('POST', 'https://model.invalid/?api_key=fixture-secret')
+    async def dispatch(_):
+        status_error = openai.APIStatusError('fixture-secret', response=httpx.Response(status, request=request), body=None)
+        status_error.__cause__ = ValueError('fixture-secret')
+        raise RuntimeError('Helper request failed') from status_error
+    with pytest.raises(ScholarError) as error:
+        await ModelGateway(store.db, dispatch=dispatch).complete(ModelRequest(run_id=run.id, purpose='write_report', messages=[]))
+    assert error.value.retryable is retryable
+    assert store.get_run(run.id).model_calls == 1
+    assert 'fixture-secret' not in str(error.value)
+    assert 'https://' not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_remote_protocol_retry_recovers_report_job_and_counts_each_dispatch(job_context):
+    from backend.scholarflow.worker.jobs import ArtifactExecutor
+    store, run = job_context
+    calls, failures = 0, []
+    async def dispatch(_):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            connection_error = openai.APIConnectionError(request=httpx.Request('POST', 'https://model.invalid/?api_key=fixture-secret'))
+            connection_error.__cause__ = httpx.RemoteProtocolError('fixture-secret')
+            raise RuntimeError('Helper request failed') from connection_error
+        return ModelResponse(text='recovered report')
+    gateway = ModelGateway(store.db, dispatch=dispatch)
+    async def operation():
+        try:
+            response = await gateway.complete(ModelRequest(run_id=run.id, purpose='write_report', messages=[]))
+        except ScholarError as error:
+            failures.append(str(error))
+            raise
+        return {'text': response.text}
+    async def no_sleep(_):
+        pass
+    result = await ArtifactExecutor(store, sleep=no_sleep).execute(run.id, 'write_report', {'input': 'fixed'}, operation)
+    assert result == {'text': 'recovered report'}
+    assert calls == 2
+    assert store.get_run(run.id).model_calls == 2
+    job, = store.list_jobs(run.id)
+    assert job.status == 'succeeded'
+    assert job.attempt_no == 2
+    with store.db.transaction(write=False) as conn:
+        rows = conn.execute('SELECT status FROM model_calls WHERE run_id=? ORDER BY created_at', (run.id,)).fetchall()
+    assert [row['status'] for row in rows] == ['failed', 'succeeded']
+    assert len(failures) == 1
+    assert 'fixture-secret' not in failures[0]
+    assert 'https://' not in failures[0]
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ import type { Plan, Project, Run } from '@/types/scholarflow';
 import { api, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
 
 const lines = (text: string) => text.split('\n').map(s => s.trim()).filter(Boolean);
-export default function PlanPanel({ project, plans, run, onRefresh }: { project: Project; plans: Plan[]; run?: Run; onRefresh: () => Promise<void> }) {
+export default function PlanPanel({ project, plans, run, hasActiveRun = false, onRefresh }: { project: Project; plans: Plan[]; run?: Run; hasActiveRun?: boolean; onRefresh: () => Promise<void> }) {
   const latest = plans[0];
   const [base, setBase] = useState<Plan | undefined>(latest), [dirty, setDirty] = useState(false);
   const [queries, setQueries] = useState(latest?.queries.join('\n') || project.question), [inclusion, setInclusion] = useState(''), [exclusion, setExclusion] = useState('');
@@ -36,7 +36,7 @@ export default function PlanPanel({ project, plans, run, onRefresh }: { project:
       {dirty && <button onClick={() => { setDirty(false); setError(''); }}>载入服务器版本</button>}</div>
   </section><aside className="sf-stack"><div className="sf-card"><div className="sf-eyebrow">01 / PLAN</div><h2 style={{ marginTop: 10 }}>先规划，再检索</h2>
     <p className="sf-muted">你可以先让规划智能体生成检索计划，也可以直接编辑左侧内容。计划历史会保留，已开始检索的输入保持固定。</p>
-    <button disabled={busy || run?.status === 'queued' || run?.status === 'running'} style={{ marginTop: 18 }} onClick={() => void perform(async () => { await api.start(project.id, { start_at: 'plan' }); setNotice('规划任务已创建'); await onRefresh(); })}>生成检索计划</button>
+    <button disabled={busy || hasActiveRun || run?.status === 'queued' || run?.status === 'running'} style={{ marginTop: 18 }} onClick={() => void perform(async () => { await api.start(project.id, { start_at: 'plan' }); setNotice('规划任务已创建'); await onRefresh(); })}>生成检索计划</button>
     {base?.approved && <button style={{ marginTop: 12 }} disabled={busy} onClick={() => void perform(async () => { await api.start(project.id, { start_at: 'search', plan_revision_id: base.id }); setNotice('检索任务已创建'); await onRefresh(); })}>按此计划检索</button>}
     </div><div className="sf-card"><h3>计划历史</h3>{plans.length ? plans.map(plan => <div key={plan.id} className="sf-between" style={{ padding: '10px 0', borderBottom: '1px solid #edf0f6' }}><span>修订 {plan.revision}</span><span className={'sf-badge ' + (plan.approved ? 'sf-green' : '')}>{plan.approved ? '已批准' : '待批准'}</span></div>) : <p className="sf-muted">还没有保存的计划。</p>}</div>
     {run?.issues.map((issue, index) => <p role="alert" className="sf-error" key={index}>{issue.message}</p>)}
