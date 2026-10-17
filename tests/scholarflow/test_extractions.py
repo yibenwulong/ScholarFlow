@@ -64,7 +64,7 @@ async def test_extraction_keeps_abstract_boundary_missing_fields_and_human_revis
 
 
 @pytest.mark.asyncio
-async def test_invalid_json_is_explicit_and_fabricated_evidence_remains_unverified(extraction_context):
+async def test_invalid_json_and_fabricated_quotes_are_explicitly_rejected(extraction_context):
     documents, run, paper, document = extraction_context
     service = ExtractionService(documents.db, FakeModel('not json'))
     with pytest.raises(ScholarError) as error:
@@ -73,8 +73,10 @@ async def test_invalid_json_is_explicit_and_fabricated_evidence_remains_unverifi
     passage = documents.store.passages(document.id)[0]
     service.gateway = FakeModel(json.dumps(reader_result({'findings': [{
         'value': 'Accuracy was 99 percent.', 'quote': 'Accuracy was 99 percent.', 'passage_id': passage.id}]})))
-    result = await service.extract(run.id, paper.paper_version_id, [document.id])
-    assert result.fields['findings'].review_status == 'insufficient_evidence'
+    with pytest.raises(ScholarError) as error:
+        await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert error.value.code == 'invalid_reader_quote'
+    assert error.value.details['diagnostics'] == [{'loc': ['fields', 'findings', 0, 'quote'], 'type': 'quote_not_contiguous'}]
 
 
 @pytest.mark.asyncio

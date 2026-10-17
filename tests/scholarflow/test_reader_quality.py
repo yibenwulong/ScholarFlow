@@ -1,4 +1,4 @@
-"""Reader v2 checks every field, audits boundaries, and resumes fenced batches."""
+"""Reader checks every field, audits boundaries, and resumes fenced batches."""
 import asyncio
 import hashlib
 import json
@@ -56,6 +56,43 @@ def audit_rows(service):
 
 
 @pytest.mark.asyncio
+async def test_reader_model_sees_paper_title_language_and_fragments_without_project_topic(extraction_context):
+    documents, run, paper, document = extraction_context
+    project = documents.library.projects.get(run.project_id)
+    documents.library.projects.update(project.id, {'question': 'Sensitive-project-topic-marker'}, project.revision)
+    observed = []
+    def output(inputs):
+        observed.append(inputs)
+        return payload(inputs)
+    model = Reader([output])
+    service = ExtractionService(documents.db, model)
+    await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert set(observed[0]) == {'paper_title', 'language', 'passages'}
+    assert observed[0]['paper_title'] == 'Synthetic paper'
+    assert observed[0]['passages'][0]['text'] == document.abstract
+    assert 'Sensitive-project-topic-marker' not in json.dumps(model.requests[0].messages)
+
+
+@pytest.mark.asyncio
+async def test_unrelated_project_topic_does_not_turn_paper_metric_batch_into_empty_output(extraction_context):
+    documents, run, paper, original = extraction_context
+    text = 'Emotion classification achieved F1 0.6500 on setting A and F1 0.3824 on setting B.'
+    document = documents.import_abstract(paper.paper_version_id, text, original.source_record_id)
+    documents.parse(document.id)
+    def output(inputs):
+        result = payload(inputs, empty=True)
+        if 'question' not in inputs:
+            result['fields']['findings'] = [{'value': 'F1 0.6500 on setting A; F1 0.3824 on setting B.',
+                'passage_id': inputs['passages'][0]['passage_id'], 'quote': inputs['passages'][0]['text']}]
+            del result['missing_reasons']['findings']
+        return result
+    service = ExtractionService(documents.db, Reader([output]))
+    extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
+    assert extraction.fields['findings'].value == 'F1 0.6500 on setting A; F1 0.3824 on setting B.'
+    assert extraction.fields['findings'].missing_reason is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('invalid', ['empty_object', 'sparse_fields', 'missing_reasons', 'whitespace_reason'])
 async def test_reader_does_not_publish_unchecked_or_unexplained_null_fields(extraction_context, invalid):
     def output(inputs):
@@ -102,7 +139,7 @@ async def test_reader_accepts_complete_json_and_records_exact_immutable_audit(ex
         return raw
     service, run, paper, document = context_service(extraction_context, Reader([output]))
     extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
-    assert extraction.coverage['reader_version'] == 'reader-v2'
+    assert extraction.coverage['reader_version'] == 'reader-v3'
     assert extraction.fields['method'].value == 'A graph method'
     assert extraction.fields['method'].missing_reason is None
     assert extraction.fields['dataset'].value is None
@@ -153,6 +190,51 @@ async def test_reader_unknown_passage_is_rejected_without_rewriting_source_ids(e
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('invalid', ['ellipsis', 'ascii_ellipsis', 'reordered', 'cross_fragment'])
+async def test_reader_rejects_noncontinuous_quotes_before_publishing_a_batch(extraction_context, invalid):
+    documents, run, paper, document = extraction_context
+    document_ids = [document.id]
+    if invalid == 'cross_fragment':
+        extra = documents.import_abstract(paper.paper_version_id, 'The second page contains limitations.', document.source_record_id)
+        documents.parse(extra.id)
+        document_ids.append(extra.id)
+    def output(inputs):
+        result = payload(inputs)
+        quote = {'ellipsis': 'The method… Accuracy was 84 percent.',
+                 'ascii_ellipsis': 'The method ... Accuracy was 84 percent.',
+                 'reordered': 'Accuracy was 84 percent. The method uses a graph.'}.get(invalid)
+        if invalid == 'cross_fragment':
+            quote = ' '.join(fragment['text'] for fragment in inputs['passages'])
+        result['fields']['method'][0]['quote'] = quote
+        return result
+    model = Reader([output])
+    service = ExtractionService(documents.db, model)
+    with pytest.raises(ScholarError) as failure:
+        await service.extract(run.id, paper.paper_version_id, document_ids)
+    assert failure.value.code == 'invalid_reader_quote' and failure.value.retryable is False
+    assert failure.value.details['diagnostics'] == [{'loc': ['fields', 'method', 0, 'quote'], 'type': 'quote_not_contiguous'}]
+    assert service.latest(run.project_id, paper.paper_version_id) is None
+    batch, = [job for job in service.runs.list_jobs(run.id) if job.stage == 'read_paper_batch']
+    assert batch.status == 'failed' and batch.attempt_no == 1 and len(model.requests) == 1
+    assert audit_rows(service)[0]['diagnostics'] == failure.value.details['diagnostics']
+
+
+@pytest.mark.asyncio
+async def test_literal_source_ellipsis_and_safe_whitespace_normalization_remain_valid(extraction_context):
+    documents, run, paper, original = extraction_context
+    document = documents.import_abstract(paper.paper_version_id, 'An inter-\nvention uses ... a graph.', original.source_record_id)
+    documents.parse(document.id)
+    def output(inputs):
+        result = payload(inputs)
+        result['fields']['method'][0]['quote'] = 'An intervention uses ... a graph.'
+        return result
+    service = ExtractionService(documents.db, Reader([output]))
+    extraction = await service.extract(run.id, paper.paper_version_id, [document.id])
+    evidence = service.records.get('evidence', extraction.fields['method'].evidence_ids[0], Evidence)
+    assert evidence.locator_status == 'located' and evidence.quote_start == 0
+
+
+@pytest.mark.asyncio
 async def test_successful_batches_survive_later_failure_and_cross_run_retry_only_reads_failed_batches(extraction_context):
     model = Reader([lambda inputs: payload(inputs), 'not JSON'])
     service, run, paper, document = context_service(extraction_context, model, batch_chars=16)
@@ -166,7 +248,7 @@ async def test_successful_batches_survive_later_failure_and_cross_run_retry_only
     extraction = await service.extract(retry_run.id, paper.paper_version_id, [document.id])
     starts = [json.loads(request.messages[-1]['content'])['passages'][0]['start'] for request in model.requests]
     assert starts == [0, 16, 16, 32, 48]
-    assert extraction.coverage['complete'] is True and extraction.coverage['reader_version'] == 'reader-v2'
+    assert extraction.coverage['complete'] is True and extraction.coverage['reader_version'] == 'reader-v3'
     assert len(audit_rows(service)) == 5
 
 

@@ -1,5 +1,5 @@
 """Cache identity shared by batch reading and its outer workflow jobs."""
-READER_VERSION = 'reader-v2'
+READER_VERSION = 'reader-v3'
 
 
 def reader_inputs(inputs: dict) -> dict:

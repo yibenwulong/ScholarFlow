@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+from types import SimpleNamespace
 from uuid import uuid4
 from typing import Literal
 
@@ -90,6 +91,11 @@ class ExtractionService:
         return max(items, key=lambda e: (e.revision, e.created_at, e.id)) if items else None
 
     @staticmethod
+    def _candidate_location(candidate, batch):
+        return next(((fragment, location) for fragment in batch if fragment['passage_id'] == candidate.passage_id
+            and (location := locate_quote(SimpleNamespace(text=fragment['text']), candidate.quote)).located), None)
+
+    @staticmethod
     def _output(raw, batch):
         text, _ = reader_json_text(raw)
         output = ReaderOutput.model_validate_json(text)
@@ -99,6 +105,10 @@ class ExtractionService:
                 if candidate.passage_id not in allowed:
                     raise ScholarError(422, 'unknown_passage', 'Reader referenced a passage outside its supplied batch',
                         details={'diagnostics': [{'loc': ['fields', name, index, 'passage_id'], 'type': 'unknown_passage'}]})
+                if ExtractionService._candidate_location(candidate, batch) is None:
+                    raise ScholarError(422, 'invalid_reader_quote',
+                        '引文无法在同一原文片段中连续定位；请使用原文短句，不得拼接、省略或改写。',
+                        details={'diagnostics': [{'loc': ['fields', name, index, 'quote'], 'type': 'quote_not_contiguous'}]})
         return output
 
     def _batch_result(self, job, manifest, batch):
@@ -121,8 +131,9 @@ class ExtractionService:
         except (ScholarError, ValidationError, ValueError, TypeError):
             raise ScholarError(409, 'invalid_reader_batch_cache', 'The saved Reader batch does not match its frozen input') from None
 
-    async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch):
+    async def _read_batch(self, run, project, paper_version_id, documents, batch_index, batch, paper_title):
         manifest = reader_inputs({'project': project.model_dump(mode='json'), 'paper_version_id': paper_version_id,
+            'paper_title': paper_title,
             'document_ids': [document.id for document in documents],
             'document_hashes': {document.id: document.sha256 for document in documents},
             'model': run.request_snapshot.get('model', {}),
@@ -138,7 +149,7 @@ class ExtractionService:
         async def operation():
             response = await self.gateway.complete(ModelRequest(run_id=run.id, purpose='read_paper', messages=[
                 {'role': 'system', 'content': READ_PROMPT}, {'role': 'user', 'content': json.dumps({
-                    'question': project.question, 'language': project.language, 'passages': batch}, ensure_ascii=False)}]))
+                    'paper_title': paper_title, 'language': project.language, 'passages': batch}, ensure_ascii=False)}]))
             _, output_format = reader_json_text(response.text)
             failure, diagnostics = None, []
             try:
@@ -150,7 +161,7 @@ class ExtractionService:
                 diagnostics = error.details['diagnostics']
                 failure = (error.code, error.message)
             audit = ReaderOutputAudit(project_id=project.id, run_id=run.id, paper_version_id=paper_version_id,
-                document_version_ids=manifest['document_ids'], input_hash=digest, raw_text=response.text,
+                document_version_ids=manifest['document_ids'], input_hash=digest, reader_version=READER_VERSION, raw_text=response.text,
                 sha256=hashlib.sha256(response.text.encode('utf-8')).hexdigest(),
                 provider_request_id=response.provider_request_id, usage=response.usage,
                 output_format=output_format, diagnostics=diagnostics)
@@ -207,7 +218,7 @@ class ExtractionService:
         candidates, audits, batch_jobs = [], [], []
         missing = {name: [] for name in FIELD_NAMES}
         for batch_index, batch in enumerate(batches):
-            output, audit_id, job_id = await self._read_batch(run, project, paper_version_id, documents, batch_index, batch)
+            output, audit_id, job_id = await self._read_batch(run, project, paper_version_id, documents, batch_index, batch, version.title)
             audits.append(audit_id)
             batch_jobs.append(job_id)
             for name in FIELD_NAMES:
@@ -240,8 +251,7 @@ class ExtractionService:
             if passage is None:
                 # Unknown IDs must never be attached to another stored source.
                 raise ScholarError(422, 'unknown_passage', 'Reader referenced a passage outside its input')
-            located = next(((fragment, location) for fragment in batch if fragment['passage_id'] == passage.id
-                and (location := locate_quote(passage.model_copy(update={'text': fragment['text']}), candidate.quote)).located), None)
+            located = self._candidate_location(candidate, batch)
             start = located[0]['start'] + located[1].start if located else None
             end = located[0]['start'] + located[1].end if located else None
             in_batch = located is not None

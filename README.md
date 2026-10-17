@@ -12,7 +12,7 @@ ScholarFlow is based on [GPT Researcher](https://github.com/assafelovic/gpt-rese
 - arXiv, Semantic Scholar and OpenAlex metadata; PDFs and abstract-only evidence are kept separate. A missing PDF does not discard a paper.
 - Immutable PDF/abstract versions, physical PDF pages starting at 1, original quote offsets and an editable comparison matrix.
 - Successful readings appear as each paper finishes. Failed papers show their own status and a single-paper retry in the evidence view; an isolated retry never starts report writing.
-- Reader v2 checks all five fields, records source-scoped missing reasons and rejects wholly empty extractions. Successful batches survive a later batch failure; old sparse results can be refreshed per paper without clearing the matrix.
+- The Reader checks all five fields, records source-scoped missing reasons and rejects wholly empty extractions. Successful batches survive a later batch failure; old sparse results can be refreshed per paper without clearing the matrix.
 - Immutable report versions, per-occurrence citation checks, explicit issue-bearing draft acceptance, Markdown/DOCX/BibTeX exports from one saved version.
 - SQLite jobs, checkpoints, leases and event recovery. Default: 20 included papers, two concurrent readers, 100 recorded model attempts, at most one automatic rewrite.
 

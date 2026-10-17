@@ -77,7 +77,7 @@ class ReaderOutputAudit(Entity):
     paper_version_id: str
     document_version_ids: list[str]
     input_hash: str
-    reader_version: str = 'reader-v2'
+    reader_version: str = 'reader-v3'
     raw_text: str
     sha256: str
     provider_request_id: str | None = None

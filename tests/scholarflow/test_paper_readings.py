@@ -54,7 +54,7 @@ def make_run(context, **changes):
 def make_job(context, run, index, stage='read_paper'):
     manifest = {'paper_version_id': context.papers[index].paper_version_id,
                 'document_ids': [context.documents[index].id], 'snapshot': run.request_snapshot,
-                '_project_id': run.project_id, 'reader_version': 'reader-v2'}
+                '_project_id': run.project_id, 'reader_version': 'reader-v3'}
     return context.services.runs.store.enqueue(run.id, 'artifact', stage, manifest, fingerprint(manifest))
 
 
