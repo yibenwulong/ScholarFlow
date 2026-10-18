@@ -9,7 +9,7 @@ interface SourceOption { key: string; claim_revision_id: string; evidence_id: st
 
 export default function CitationInspector({ detail, dirtyBlocks, onLocate, disabled = false }: {
   detail: ReportDetail; dirtyBlocks: Set<string>; disabled?: boolean;
-  onLocate: (blockId: string, tokenIndex: number, edit: boolean) => void;
+  onLocate: (blockId: string) => void;
 }) {
   const [selected, setSelected] = useState<string>();
   const [sources, setSources] = useState<{ versionId: string; items: SourceOption[]; failed: boolean }>();
@@ -67,8 +67,8 @@ export default function CitationInspector({ detail, dirtyBlocks, onLocate, disab
         context = block.text.slice(start, end);
       }
       const reason = dirty ? '正文有未保存修改。下方显示已保存版本的内容，请先保存并重新复核。'
-        : !bound ? '这处引用尚未绑定具体句子和原文证据，暂时无法判断论文是否支持这句话。'
-        : result?.reason || '此处已有原文绑定，仍需要复核是否支持报告中的句子。';
+        : !bound ? '系统尚未建立这句话与原文证据的对应关系，暂时无法确认论文是否支持这句话。'
+        : result?.reason || '此处已有原文证据，仍需要核验是否支持报告中的句子。';
       const checker = result?.checker?.startsWith('human') ? '人工复核' : result?.checker === 'model_support_v1' ? '模型支持性检查'
         : result?.checker === 'source_guard_v1' ? '引用完整性检查' : '辅助核验';
       return <div key={item.id}>
@@ -79,16 +79,15 @@ export default function CitationInspector({ detail, dirtyBlocks, onLocate, disab
         {expanded && block && <div ref={panel} id={`sf-citation-detail-${item.id}`} role="region" aria-label={`引用 ${index + 1} 详情`} className="sf-citation-detail">
           <p className="sf-small sf-muted">所在章节：{block.heading || '正文'}</p>
           <p><strong>对应论文：</strong>{reference ? `[${reference.number}] ` : ''}{typeof title === 'string' ? title : '文献信息未匹配'}</p>
-          <h4>{hasSpan ? '报告中的句子' : '引用上下文（尚未绑定具体句子）'}</h4>
+          <h4>{hasSpan ? '报告中的句子' : '引用附近的报告内容'}</h4>
           <blockquote className="sf-source-quote">{readable(context)}</blockquote>
-          {!bound && <p className="sf-notice">未绑定原文证据。需要先选择报告中的句子及对应原文，再进行复核。</p>}
+          {!bound && <p className="sf-notice">这处引用尚无关联的原文证据，支持性待核验。</p>}
           <p>{reason}</p><p className="sf-muted sf-small">检查方式：{checker}</p>
           <div className="sf-stack" style={{ marginTop: 12 }}>
-            <button disabled={disabled} onClick={() => onLocate(item.block_id, item.token_index, false)}>定位报告正文</button>
-            <button disabled={disabled || dirty} onClick={() => onLocate(item.block_id, item.token_index, true)}>{bound ? '定位正文并编辑绑定' : '定位正文并补充绑定'}</button>
+            <button disabled={disabled} onClick={() => onLocate(item.block_id)}>定位报告正文</button>
             {bound && !currentSources && <p role="status" className="sf-muted sf-small">正在载入原文对应关系…</p>}
             {bound && currentSources?.failed && <div className="sf-notice"><p>原文对应关系暂时无法加载，未生成未经确认的原文入口。</p><button onClick={() => setSourceAttempt(previous => previous + 1)}>重新加载原文信息</button></div>}
-            {bound && currentSources && !currentSources.failed && sourceLinks.length < new Set(item.evidence_ids).size && <p className="sf-notice">部分原文对应关系未找到，请核对或重新绑定。</p>}
+            {bound && currentSources && !currentSources.failed && sourceLinks.length < new Set(item.evidence_ids).size && <p className="sf-notice">部分原文依据暂不可查看，当前无法完整核验此处引用。</p>}
             {bound && sourceLinks.map(source => <Link className="sf-button" key={source.evidence_id}
               href={`/projects/${detail.version.project_id}?tab=evidence&claim=${encodeURIComponent(source.claim_revision_id)}&evidence=${encodeURIComponent(source.evidence_id)}`}>{dirty ? '查看已保存版本原文依据' : '查看此处原文依据'}</Link>)}
           </div>

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mockReport } from './report-fixtures';
 
-test('手动切换绑定位置后再次定位同一引用，正文与绑定控件仍指向同一处', async ({ page }) => {
+test('切换章节后再次查看引用，仍定位回对应报告章节', async ({ page }) => {
   const state = await mockReport(page);
   const text = 'First finding. [@sf_one]\nSecond finding. [@sf_one]';
   state.version.blocks[0].text = text;
@@ -13,11 +13,14 @@ test('手动切换绑定位置后再次定位同一引用，正文与绑定控�
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole('button', { name: '引用核验', exact: true }).click();
     await page.getByRole('button', { name: '引用 2 · 冲突', exact: true }).click();
-    await page.getByRole('region', { name: '引用 2 详情', exact: true }).getByRole('button', { name: '定位正文并编辑绑定', exact: true }).click();
-    await expect(page.getByRole('combobox', { name: '引用位置', exact: true })).toHaveValue('1');
-    if (!attempt) await page.getByRole('combobox', { name: '引用位置', exact: true }).selectOption('0');
+    await page.getByRole('region', { name: '引用 2 详情', exact: true }).getByRole('button', { name: '定位报告正文', exact: true }).click();
+    await expect(page.locator('.sf-report-editor')).toBeFocused();
+    await expect(page.getByTestId('report-preview')).toContainText('Second finding.');
+    if (!attempt) {
+      await page.getByRole('navigation', { name: '报告大纲', exact: true }).getByRole('button', { name: '2. 分歧', exact: true }).click();
+      await expect(page.getByTestId('report-preview')).toContainText('其他内容');
+    }
   }
-  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue(text);
   await expect(page.getByText('存在未保存修改', { exact: true })).toHaveCount(0);
 });
 

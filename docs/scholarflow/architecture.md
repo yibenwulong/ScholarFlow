@@ -22,7 +22,7 @@ Claims and evidence form a source chain. Report citations bind each occurrence t
 
 Exports render numbering once from the saved report's first citation order. Markdown, DOCX and BibTeX use that version; only actually cited papers appear in bibliography output. Problem drafts require acceptance of that exact version/check pair and retain a draft marker and source version audit.
 
-The report editor supports inserting existing input citations and explicitly binding a selected statement to an occurrence and source quote. Changed text does not inherit prior approval. Saving locks editing until the new version loads. Every explicit recheck is a fresh operation; recovery may reuse that operation's result. A new export requires the latest published check, and draft files retain occurrence warnings, the full issue appendix and stored search provenance. Existing exported files remain immutable historical artifacts.
+The report editor supports editing text and saving new versions, with read-only inspection of citations and their available source evidence. Users do not maintain internal citation bindings, and the report UI provides no manual rebinding controls. Changed text does not inherit prior approval. System-generated associations can still be incomplete; a recheck evaluates the saved version but does not rewrite text or repair missing associations. Saving locks editing until the new version loads. Every explicit recheck is a fresh operation; recovery may reuse that operation's result. A new export requires the latest published check, and draft files retain occurrence warnings, the full issue appendix and stored search provenance. Existing exported files remain immutable historical artifacts.
 
 ## Recovery and budgets
 

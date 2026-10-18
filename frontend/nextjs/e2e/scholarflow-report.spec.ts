@@ -25,20 +25,19 @@ test('保存响应等待期间锁定编辑，成功后保留已提交文字', as
   await expect.poll(() => state.version.id).toBe('report2');
 });
 
-test('编辑后选择论断和现有原文，明确重新绑定引用', async ({ page }) => {
+test('编辑报告可直接保存，修改后的引用待核验且不要求手动绑定', async ({ page }) => {
   const state = await mockReport(page);
-  await page.route('**/api/scholarflow/reports/*/citation-options', route => route.fulfill({ json: { items: [
-    { key: 'sf_one', title: '科研论文 a', claim_revision_id: 'claim1', evidence_id: 'e1', quote: 'The method uses a graph.', source_scope: 'fulltext', locator_status: 'located' } ] } }));
   await editReport(page);
+  await expect(page.getByRole('group', { name: '引用与原文依据', exact: true })).toHaveCount(0);
   const body = page.getByRole('textbox', { name: '报告正文', exact: true });
   await body.fill('🧪 The method uses a graph! [@sf_one]');
-  await body.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(0, 26));
-  await page.getByRole('button', { name: '使用所选文字作为论断' }).click();
-  await page.getByRole('combobox', { name: '原文依据', exact: true }).selectOption('e1');
-  await page.getByRole('button', { name: '确认此处引用绑定' }).click();
+  await expect(page.getByText('引用待复核', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '导出已保存版本', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '保存新报告版本' }).click();
   await expect.poll(() => state.version.id).toBe('report2');
-  expect(state.version.blocks[0].claims).toEqual([{ start: 0, end: 25, token_index: 0, claim_revision_ids: ['claim1'], evidence_ids: ['e1'] }]);
+  await expect(body).toHaveValue('🧪 The method uses a graph! [@sf_one]');
+  expect(state.version.blocks[0].claims).toEqual([]);
+  expect(state.version.blocks[1].text).toBe('The method does not use a graph. [@sf_one]');
 });
 
 test('编辑段落后相关引用待复核，未保存时不能导出', async ({ page }) => {

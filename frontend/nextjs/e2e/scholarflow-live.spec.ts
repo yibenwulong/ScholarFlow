@@ -21,12 +21,7 @@ test('真实 API 与独立 worker 完成科研调研', async ({ page, request },
   await expect(page.getByText('质量检查通过', { exact: true }).first()).toBeVisible();
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('A user edited interpretation. [@' +
     (await page.getByRole('textbox', { name: '报告正文', exact: true }).inputValue()).split('[@')[1]);
-  await page.getByRole('textbox', { name: '报告正文', exact: true }).evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(0, 'A user edited interpretation.'.length));
-  await page.getByRole('button', { name: '使用所选文字作为论断' }).click();
-  const evidence = page.getByRole('combobox', { name: '原文依据', exact: true });
-  await expect(evidence.locator('option')).toHaveCount(2);
-  await evidence.selectOption({ index: 1 });
-  await page.getByRole('button', { name: '确认此处引用绑定' }).click();
+  await expect(page.getByRole('group', { name: '引用与原文依据', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '保存新报告版本' }).click();
   await expect(page.getByText('存在未保存修改', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '复核此版本' }).click();

@@ -4,7 +4,6 @@ import type { ExportJob, Page, ReportBlock, ReportDetail, ReportVersion, Run } f
 import { api, keyFor, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
 import { latestResearchRun } from '@/lib/scholarflow/runs';
 import CitationInspector from './CitationInspector';
-import CitationBinder from './CitationBinder';
 import ReportPreview from './ReportPreview';
 
 export default function ReportPanel({ projectId, runs, onRefresh }: { projectId: string; runs: Run[]; onRefresh: () => Promise<void> }) {
@@ -14,11 +13,8 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
   const [listError, setListError] = useState(''), [detailError, setDetailError] = useState('');
   const [preview, setPreview] = useState(true), [mobile, setMobile] = useState<'editor' | 'citations'>('editor');
   const [format, setFormat] = useState<'markdown' | 'docx' | 'bibtex'>('markdown'), [exports, setExports] = useState<ExportJob[]>([]);
-  const editor = useRef<HTMLTextAreaElement>(null);
   const reportBody = useRef<HTMLElement>(null);
-  const [citationTarget, setCitationTarget] = useState<{ blockId: string; tokenIndex: number; edit: boolean }>();
-  const [bindingTarget, setBindingTarget] = useState<{ blockId: string; tokenIndex: number; request: number }>();
-  const [confirmedBlocks, setConfirmedBlocks] = useState<Set<string>>(new Set());
+  const [citationTarget, setCitationTarget] = useState<string>();
   const dirtyBlocks = useMemo(() => new Set(blocks.filter(block => { const base = detail?.version.blocks.find(b => b.id === block.id); return !base || base.text !== block.text || base.heading !== block.heading || JSON.stringify(base.claims) !== JSON.stringify(block.claims); }).map(b => b.id)), [blocks, detail]);
   const dirty = dirtyBlocks.size > 0;
   const locked = busy || selected !== detail?.version.id;
@@ -38,8 +34,7 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
         if (!alive) return;
         if (!initialized) {
           initialized = true;
-          setDetail(value); setActive(0); setConfirmedBlocks(new Set());
-          setBindingTarget(undefined); setCitationTarget(undefined);
+          setDetail(value); setActive(0); setCitationTarget(undefined);
           let cached: ReportBlock[] | undefined;
           try { const raw = sessionStorage.getItem('sf-report:' + selected); if (raw) { const values: unknown = JSON.parse(raw); if (Array.isArray(values) && values.length === value.version.blocks.length && values.every((v, i) => v && typeof v === 'object' && 'text' in v && typeof v.text === 'string' && 'id' in v && v.id === value.version.blocks[i].id)) cached = value.version.blocks.map((block, i) => ({ ...block, text: String(values[i].text) })); } } catch {}
           setBlocks(cached || value.version.blocks);
@@ -66,29 +61,22 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
   }, [selected]);
   const text = blocks[active]?.text || '';
   useEffect(() => {
-    if (!citationTarget || blocks[active]?.id !== citationTarget.blockId || preview !== !citationTarget.edit) return;
-    const node = citationTarget.edit ? editor.current : reportBody.current;
+    if (!citationTarget || blocks[active]?.id !== citationTarget || !preview) return;
+    const node = reportBody.current;
     if (!node) return;
     node.focus({ preventScroll: true }); node.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    if (citationTarget.edit && editor.current) {
-      const token = Array.from(text.matchAll(/\[@([^\]\s]+)\]/g))[citationTarget.tokenIndex];
-      if (token) editor.current.setSelectionRange(token.index!, token.index! + token[0].length);
-    }
     setCitationTarget(undefined);
-  }, [citationTarget, blocks, active, preview, text]);
-  function locateCitation(blockId: string, tokenIndex: number, edit: boolean) {
+  }, [citationTarget, blocks, active, preview]);
+  function locateCitation(blockId: string) {
     const index = blocks.findIndex(block => block.id === blockId);
     if (locked || index < 0) return;
-    setActive(index); setMobile('editor'); setPreview(!edit);
-    if (edit) setBindingTarget(previous => ({ blockId, tokenIndex, request: (previous?.request || 0) + 1 }));
-    setCitationTarget({ blockId, tokenIndex, edit });
+    setActive(index); setMobile('editor'); setPreview(true); setCitationTarget(blockId);
   }
   async function perform(operation: () => Promise<void>) { setBusy(true); setError(''); try { await operation(); } catch (failure) { setError(messageFor(failure)); } finally { setBusy(false); } }
   async function save() {
     if (!detail) return;
     const version = detail.version;
     const result = await scholarRequest<ReportVersion>(`/projects/${projectId}/reports`, write('POST', { expected_revision: version.revision,
-      confirmed_binding_blocks: Array.from(confirmedBlocks),
       draft: { run_id: version.run_id, title: version.title, blocks, bindings: version.bindings, manifest: version.manifest, occurrences: [] } }));
     try { sessionStorage.removeItem('sf-report:' + version.id); } catch {} setSelected(result.id); setNotice('已保存为新报告版本，需要重新核验修改内容'); await load(); await onRefresh();
   }
@@ -113,7 +101,7 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
       {detail.outdated && <span className="sf-badge sf-amber">报告已过期：文献版本或提取项有更新</span>}</div>
     {failure && <p role="alert" className="sf-error" style={{ marginTop: 14 }}>{failure}</p>}{notice && <p role="status" className="sf-notice" style={{ marginTop: 14 }}>{notice}</p>}
     <div className="sf-row" style={{ marginTop: 16 }}><button disabled={!dirty || locked} onClick={() => void perform(save)}>保存新报告版本</button>
-      {dirty && <button disabled={locked} onClick={() => { setBlocks(detail.version.blocks); setConfirmedBlocks(new Set()); setError(''); }}>放弃本地修改</button>}
+      {dirty && <button disabled={locked} onClick={() => { setBlocks(detail.version.blocks); setError(''); }}>放弃本地修改</button>}
       <button disabled={dirty || locked} onClick={() => void perform(async () => { await scholarRequest(`/reports/${selected}/checks`, write('POST', {}, keyFor())); setNotice('独立复核任务已创建'); await onRefresh(); })}>复核此版本</button>
       {acceptanceRun && <button disabled={dirty || locked} onClick={() => void perform(async () => { await api.action(acceptanceRun, 'accept_draft', { report_version_id: detail.version.id, verification_record_id: detail.verification!.id }); setNotice('已确认此问题草稿，质量问题记录会保留'); await onRefresh(); })}>接受此版本草稿</button>}
       <select aria-label="导出格式" style={{ width: 135 }} value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="markdown">Markdown</option><option value="docx">Word / DOCX</option><option value="bibtex">BibTeX</option></select>
@@ -122,9 +110,8 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
   </section><div className="sf-row"><button onClick={() => setMobile('editor')}>报告正文</button><button onClick={() => setMobile('citations')}>引用核验</button></div>
     <div className="sf-report-layout"><nav className={'sf-card sf-report-outline ' + (mobile !== 'editor' ? 'sf-mobile-hidden' : '')} aria-label="报告大纲"><h3>报告大纲</h3>{blocks.map((block, index) => <button className={active === index ? 'sf-outline-active' : ''} key={block.id} onClick={() => setActive(index)}>{index + 1}. {block.heading || '正文'}</button>)}</nav>
       <section ref={reportBody} tabIndex={-1} className={'sf-card sf-report-editor ' + (mobile !== 'editor' ? 'sf-mobile-hidden' : '')}><div className="sf-between"><h3>{blocks[active]?.heading || '正文'}</h3><button onClick={() => setPreview(value => !value)}>{preview ? '编辑正文' : '预览正文'}</button></div>
-        {preview ? <ReportPreview blocks={blocks} bindings={detail.version.bindings} active={active} /> : <><label htmlFor="report-body">报告正文</label><textarea id="report-body" ref={editor} disabled={locked} className="sf-report-textarea" value={text} onChange={e => { const id = blocks[active].id; setConfirmedBlocks(previous => new Set(Array.from(previous).filter(item => item !== id))); setBlocks(previous => previous.map((block, index) => index === active ? { ...block, text: e.target.value, claims: [] } : block)); }} />
-<CitationBinder key={`${selected}:${blocks[active]?.id}:${bindingTarget && bindingTarget.blockId === blocks[active]?.id ? bindingTarget.request : 0}`} versionId={detail.version.id} block={blocks[active]} bindings={detail.version.bindings} editor={editor} disabled={locked} initialTokenIndex={bindingTarget?.blockId === blocks[active]?.id ? bindingTarget?.tokenIndex : 0} onChange={value => setBlocks(previous => previous.map(block => block.id === value.id ? value : block))} onConfirm={() => setConfirmedBlocks(previous => new Set([...Array.from(previous), blocks[active].id]))} />
-        <p className="sf-muted sf-small" style={{ marginTop: 14 }}>编辑时保留原始引用标记，预览会显示文献编号。正文修改后，需要重新绑定或复核对应的引用。</p></>}
+        {preview ? <ReportPreview blocks={blocks} bindings={detail.version.bindings} active={active} /> : <><label htmlFor="report-body">报告正文</label><textarea id="report-body" disabled={locked} className="sf-report-textarea" value={text} onChange={e => setBlocks(previous => previous.map((block, index) => index === active ? { ...block, text: e.target.value, claims: [] } : block))} />
+        <p className="sf-muted sf-small" style={{ marginTop: 14 }}>编辑时保留原始引用标记，预览会显示文献编号。正文修改后，相关引用会标记为待核验。</p></>}
       </section><div className={'sf-report-citations ' + (mobile !== 'citations' ? 'sf-mobile-hidden' : '')}><CitationInspector detail={detail} dirtyBlocks={dirtyBlocks} disabled={locked} onLocate={locateCitation} /></div>
     </div></div>;
 }

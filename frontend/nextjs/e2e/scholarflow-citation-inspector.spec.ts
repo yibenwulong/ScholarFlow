@@ -18,7 +18,8 @@ test('unbound context keeps citations whole at both excerpt boundaries', async (
   await page.getByRole('button', { name: '引用 2 · 待复核', exact: true }).click();
   const detail = page.getByRole('region', { name: '引用 2 详情', exact: true });
   await expect(detail.locator('blockquote')).toHaveText(`[2]${'a'.repeat(140)}[1]${'b'.repeat(60)}[2]`);
-  await detail.getByRole('button', { name: '定位正文并补充绑定', exact: true }).click();
+  await detail.getByRole('button', { name: '定位报告正文', exact: true }).click();
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue(text);
 });
 
@@ -49,7 +50,7 @@ test('长引用列表点击后详情立即可见，并明确未绑定的原因�
   const detail = page.getByRole('region', { name: '引用 1 详情', exact: true });
   await expect(detail).toBeInViewport();
   await expect(detail).toContainText('科研论文 a');
-  await expect(detail).toContainText('未绑定原文证据');
+  await expect(detail).toContainText('尚无关联的原文证据');
   await expect(detail).toContainText('第1句研究结果');
   await expect(detail).not.toContainText('Citation has no explicit');
   await expect(detail).not.toContainText('模型支持性检查');
@@ -57,7 +58,7 @@ test('长引用列表点击后详情立即可见，并明确未绑定的原因�
   expect(writes).toEqual([]);
 });
 
-test('选择列表末尾的引用后可直接定位原始标记并选中正确的绑定位置', async ({ page }) => {
+test('选择列表末尾的引用后可定位对应报告章节，查看不修改原文', async ({ page }) => {
   const version = await unboundReport(page);
   await page.goto('/projects/p1?tab=report');
   await page.getByRole('button', { name: '引用核验', exact: true }).click();
@@ -67,14 +68,13 @@ test('选择列表末尾的引用后可直接定位原始标记并选中正确�
   await expect(detail).toBeInViewport();
   await expect(last).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('button', { name: '引用 1 · 待复核', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  await detail.getByRole('button', { name: '定位正文并补充绑定', exact: true }).click();
+  await detail.getByRole('button', { name: '定位报告正文', exact: true }).click();
+  await expect(page.locator('.sf-report-editor')).toBeFocused();
+  await expect(page.getByTestId('report-preview')).toContainText('第14句研究结果');
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
   const body = page.getByRole('textbox', { name: '报告正文', exact: true });
   await expect(body).toBeVisible();
-  await expect(body).toBeFocused();
   await expect(body).toHaveValue(version.blocks[0].text);
-  await expect(page.getByRole('combobox', { name: '引用位置', exact: true })).toHaveValue('13');
-  const selection = await body.evaluate((node: HTMLTextAreaElement) => node.value.slice(node.selectionStart, node.selectionEnd));
-  expect(selection).toBe('[@sf_one]');
   await expect(page.getByText('存在未保存修改', { exact: true })).toHaveCount(0);
 });
 
@@ -96,7 +96,7 @@ test('有绑定时分别显示准确论断与原文入口，按Unicode字符截�
   await expect(first).toHaveCount(0);
 });
 
-test('未保存正文修改时不能将旧绑定当作当前结果，也不能用旧位置直接重绑', async ({ page }) => {
+test('未保存正文修改时仍明确标记旧版本原文，相关引用待复核', async ({ page }) => {
   await mockReport(page);
   await page.goto('/projects/p1?tab=report');
   await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
@@ -106,5 +106,6 @@ test('未保存正文修改时不能将旧绑定当作当前结果，也不能�
   const detail = page.getByRole('region', { name: '引用 1 详情', exact: true });
   await expect(detail).toContainText('未保存修改');
   await expect(detail).toContainText('已保存版本');
-  await expect(detail.getByRole('button', { name: '定位正文并编辑绑定', exact: true })).toBeDisabled();
+  await expect(detail.getByRole('link', { name: '查看已保存版本原文依据', exact: true })).toHaveAttribute('href', '/projects/p1?tab=evidence&claim=claim1&evidence=e1');
+  await expect(detail.getByRole('button', { name: /绑定/ })).toHaveCount(0);
 });

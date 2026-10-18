@@ -2,6 +2,8 @@
 
 Date: 2026-10-15. Windows, Python 3.13.5, Node 24.19.0, Next 14.2.35, isolated Edge via Playwright. Tests use distributable synthetic fixtures and no paid model credentials.
 
+Current report UI note (2026-10-18): manual citation rebinding controls have been removed. Users can edit and save report text, request a fresh check, and inspect available sources read-only; they do not maintain internal citation bindings. Incomplete automatic associations remain a limitation, and rechecking does not repair them. Rebinding mentioned in the historical results below describes the earlier implementation, not the current user workflow.
+
 | Check | Observed result |
 | --- | --- |
 | `python -m pytest tests/scholarflow -q` with `GPTR_BLOCK_NETWORK=1` | 108 passed; one inherited LangChain deprecation warning |
