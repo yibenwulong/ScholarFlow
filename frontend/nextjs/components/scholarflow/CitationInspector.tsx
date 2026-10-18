@@ -47,15 +47,25 @@ export default function CitationInspector({ detail, dirtyBlocks, onLocate, disab
       const bound = hasSpan && item.claim_revision_ids.length > 0 && item.evidence_ids.length > 0;
       const status = dirty || !bound ? 'needs_recheck' : result?.status || 'needs_recheck';
       const expanded = item.id === selectedId;
-      const token = Array.from((block?.text || '').matchAll(/\[@([^\]\s]+)\]/g))[item.token_index];
+      const tokens = Array.from((block?.text || '').matchAll(/\[@([^\]\s]+)\]/g));
+      const token = tokens[item.token_index];
       const binding = detail.version.bindings.find(binding => binding.key === token?.[1]);
       const reference = detail.references.find(reference => reference.key === binding?.key);
       const sourceLinks = currentSources?.items.filter(source => source.key === binding?.key &&
         item.claim_revision_ids.includes(source.claim_revision_id) && item.evidence_ids.includes(source.evidence_id)) || [];
       const title = binding?.bibliography_snapshot.title;
-      const context = hasSpan ? characters.slice(item.claim_start!, item.claim_end!).join('') : token && block
-        ? block.text.slice(Math.max(0, token.index! - 160), Math.min(block.text.length, token.index! + token[0].length + 80))
-        : '无法在已保存正文中定位此引用，请检查报告版本。';
+      let context = hasSpan ? characters.slice(item.claim_start!, item.claim_end!).join('') : '无法在已保存正文中定位此引用，请检查报告版本。';
+      if (!hasSpan && token && block) {
+        let start = Math.max(0, token.index! - 160);
+        let end = Math.min(block.text.length, token.index! + token[0].length + 80);
+        // Keep adjacent citation tokens whole so the display can resolve their reference numbers.
+        for (const adjacent of tokens) {
+          const tokenStart = adjacent.index!, tokenEnd = tokenStart + adjacent[0].length;
+          if (tokenStart < start && start < tokenEnd) start = tokenStart;
+          if (tokenStart < end && end < tokenEnd) end = tokenEnd;
+        }
+        context = block.text.slice(start, end);
+      }
       const reason = dirty ? '正文有未保存修改。下方显示已保存版本的内容，请先保存并重新复核。'
         : !bound ? '这处引用尚未绑定具体句子和原文证据，暂时无法判断论文是否支持这句话。'
         : result?.reason || '此处已有原文绑定，仍需要复核是否支持报告中的句子。';

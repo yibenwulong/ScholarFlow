@@ -1,6 +1,27 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mockReport } from './report-fixtures';
 
+test('unbound context keeps citations whole at both excerpt boundaries', async ({ page }) => {
+  const state = await mockReport(page);
+  const otherKey = 'sf_11112222333344445555666677778888';
+  const text = `[@${otherKey}]${'a'.repeat(140)}[@sf_one]${'b'.repeat(60)}[@${otherKey}]after`;
+  const version = { ...state.version, blocks: [{ ...state.version.blocks[0], text }],
+    bindings: [...state.version.bindings, { key: otherKey, paper_version_id: 'vb', bibliography_snapshot: { title: 'Paper B' } }],
+    occurrences: [0, 1, 2].map(index => ({ id: `excerpt${index}`, block_id: 'b1', token_index: index,
+      claim_revision_ids: [], evidence_ids: [], claim_start: null, claim_end: null })) };
+  await page.route('**/api/scholarflow/reports/report1', route => route.fulfill({ json: {
+    version, verification: null, outdated: false, citations: version.occurrences,
+    references: [{ number: 1, key: 'sf_one', title: 'Paper A' }, { number: 2, key: otherKey, title: 'Paper B' }], rendered_markdown: '',
+  } }));
+  await page.goto('/projects/p1?tab=report');
+  await page.getByRole('button', { name: '引用核验', exact: true }).click();
+  await page.getByRole('button', { name: '引用 2 · 待复核', exact: true }).click();
+  const detail = page.getByRole('region', { name: '引用 2 详情', exact: true });
+  await expect(detail.locator('blockquote')).toHaveText(`[2]${'a'.repeat(140)}[1]${'b'.repeat(60)}[2]`);
+  await detail.getByRole('button', { name: '定位正文并补充绑定', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue(text);
+});
+
 async function unboundReport(page: Page) {
   const state = await mockReport(page);
   const text = Array.from({ length: 14 }, (_, index) => `第${index + 1}句研究结果 [@sf_one]。`).join('\n');
