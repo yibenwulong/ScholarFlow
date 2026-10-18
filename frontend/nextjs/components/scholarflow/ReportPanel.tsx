@@ -3,16 +3,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ExportJob, Page, ReportBlock, ReportDetail, ReportVersion, Run } from '@/types/scholarflow';
 import { api, keyFor, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
 import { latestResearchRun } from '@/lib/scholarflow/runs';
-import { markdownToHtml } from '@/helpers/markdownHelper';
 import CitationInspector from './CitationInspector';
 import CitationBinder from './CitationBinder';
+import ReportPreview from './ReportPreview';
 
 export default function ReportPanel({ projectId, runs, onRefresh }: { projectId: string; runs: Run[]; onRefresh: () => Promise<void> }) {
   const [versions, setVersions] = useState<ReportVersion[]>([]), [selected, setSelected] = useState<string>();
   const [detail, setDetail] = useState<ReportDetail>(), [blocks, setBlocks] = useState<ReportBlock[]>([]), [active, setActive] = useState(0);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false);
   const [listError, setListError] = useState(''), [detailError, setDetailError] = useState('');
-  const [preview, setPreview] = useState(false), [html, setHtml] = useState(''), [mobile, setMobile] = useState<'editor' | 'citations'>('editor');
+  const [preview, setPreview] = useState(true), [mobile, setMobile] = useState<'editor' | 'citations'>('editor');
   const [format, setFormat] = useState<'markdown' | 'docx' | 'bibtex'>('markdown'), [exports, setExports] = useState<ExportJob[]>([]);
   const editor = useRef<HTMLTextAreaElement>(null);
   const [confirmedBlocks, setConfirmedBlocks] = useState<Set<string>>(new Set());
@@ -61,7 +61,6 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
     void poll(); const timer = setInterval(() => void poll(), 2500); return () => { alive = false; clearInterval(timer); };
   }, [selected]);
   const text = blocks[active]?.text || '';
-  useEffect(() => { let alive = true; markdownToHtml(text).then(value => { if (alive) setHtml(value); }); return () => { alive = false; }; }, [text]);
   async function perform(operation: () => Promise<void>) { setBusy(true); setError(''); try { await operation(); } catch (failure) { setError(messageFor(failure)); } finally { setBusy(false); } }
   async function save() {
     if (!detail) return;
@@ -98,12 +97,12 @@ export default function ReportPanel({ projectId, runs, onRefresh }: { projectId:
       <select aria-label="导出格式" style={{ width: 135 }} value={format} onChange={e => setFormat(e.target.value as typeof format)}><option value="markdown">Markdown</option><option value="docx">Word / DOCX</option><option value="bibtex">BibTeX</option></select>
       <button disabled={!canExport || locked} onClick={() => void perform(async () => { await scholarRequest(`/reports/${selected}/exports`, write('POST', { format, verification_id: detail.verification!.id, draft_acceptance_id: acceptedRun?.manifests.acceptance_id || null }, keyFor())); setNotice('导出任务已创建，完成后可下载'); await onRefresh(); })}>导出已保存版本</button>
       {exports.filter(job => job.status === 'ready').map(job => <a className="sf-button" href={`/api/scholarflow/exports/${job.id}/file`} key={job.id}>下载 {job.format}{job.draft ? ' 草稿' : ''}</a>)}</div>
-  </section><div className="sf-row"><button onClick={() => setMobile('editor')}>编辑正文</button><button onClick={() => setMobile('citations')}>引用核验</button></div>
+  </section><div className="sf-row"><button onClick={() => setMobile('editor')}>报告正文</button><button onClick={() => setMobile('citations')}>引用核验</button></div>
     <div className="sf-report-layout"><nav className={'sf-card sf-report-outline ' + (mobile !== 'editor' ? 'sf-mobile-hidden' : '')} aria-label="报告大纲"><h3>报告大纲</h3>{blocks.map((block, index) => <button className={active === index ? 'sf-outline-active' : ''} key={block.id} onClick={() => setActive(index)}>{index + 1}. {block.heading || '正文'}</button>)}</nav>
       <section className={'sf-card sf-report-editor ' + (mobile !== 'editor' ? 'sf-mobile-hidden' : '')}><div className="sf-between"><h3>{blocks[active]?.heading || '正文'}</h3><button onClick={() => setPreview(value => !value)}>{preview ? '编辑正文' : '预览正文'}</button></div>
-        {preview ? <div data-testid="report-preview" className="prose max-w-none" dangerouslySetInnerHTML={{ __html: html }} /> : <><label htmlFor="report-body">报告正文</label><textarea id="report-body" ref={editor} disabled={locked} className="sf-report-textarea" value={text} onChange={e => { const id = blocks[active].id; setConfirmedBlocks(previous => new Set(Array.from(previous).filter(item => item !== id))); setBlocks(previous => previous.map((block, index) => index === active ? { ...block, text: e.target.value, claims: [] } : block)); }} /></>}
-<CitationBinder key={selected + ":" + blocks[active]?.id} versionId={detail.version.id} block={blocks[active]} bindings={detail.version.bindings} editor={editor} disabled={locked || preview} onChange={value => setBlocks(previous => previous.map(block => block.id === value.id ? value : block))} onConfirm={() => setConfirmedBlocks(previous => new Set([...Array.from(previous), blocks[active].id]))} />
-        <p className="sf-muted sf-small" style={{ marginTop: 14 }}>引用键保留为 [@sf_…]。正文修改后，需要重新绑定或复核对应的引用。</p>
+        {preview ? <ReportPreview blocks={blocks} bindings={detail.version.bindings} active={active} /> : <><label htmlFor="report-body">报告正文</label><textarea id="report-body" ref={editor} disabled={locked} className="sf-report-textarea" value={text} onChange={e => { const id = blocks[active].id; setConfirmedBlocks(previous => new Set(Array.from(previous).filter(item => item !== id))); setBlocks(previous => previous.map((block, index) => index === active ? { ...block, text: e.target.value, claims: [] } : block)); }} />
+<CitationBinder key={selected + ":" + blocks[active]?.id} versionId={detail.version.id} block={blocks[active]} bindings={detail.version.bindings} editor={editor} disabled={locked} onChange={value => setBlocks(previous => previous.map(block => block.id === value.id ? value : block))} onConfirm={() => setConfirmedBlocks(previous => new Set([...Array.from(previous), blocks[active].id]))} />
+        <p className="sf-muted sf-small" style={{ marginTop: 14 }}>编辑时保留原始引用标记，预览会显示文献编号。正文修改后，需要重新绑定或复核对应的引用。</p></>}
       </section><div className={'sf-report-citations ' + (mobile !== 'citations' ? 'sf-mobile-hidden' : '')}><CitationInspector detail={detail} dirtyBlocks={dirtyBlocks} /></div>
     </div></div>;
 }

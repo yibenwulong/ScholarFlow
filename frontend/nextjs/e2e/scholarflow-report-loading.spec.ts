@@ -47,7 +47,7 @@ test('初始报告列表为空后首份发布报告自动显示', async ({ page 
   await expect.poll(() => listReads).toBeGreaterThan(0);
   await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveCount(0);
   published = true;
-  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue('The method uses a graph. [@sf_one]');
+  await expect(page.getByTestId('report-preview')).toContainText('The method uses a graph. [1]');
 });
 
 test('首次报告详情暂时失败后轮询初始化正文并清除加载错误', async ({ page }) => {
@@ -61,7 +61,7 @@ test('首次报告详情暂时失败后轮询初始化正文并清除加载错�
   });
   await page.goto('/projects/p1?tab=report');
   await expect(page.getByText('首次详情连接中断', { exact: true })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue('The method uses a graph. [@sf_one]');
+  await expect(page.getByTestId('report-preview')).toContainText('The method uses a graph. [1]');
   await expect(page.getByText('首次详情连接中断', { exact: true })).toHaveCount(0);
 });
 
@@ -74,6 +74,7 @@ test('报告详情轮询更新核验时保留正在编辑的段落和正文', as
   });
   await page.goto('/projects/p1?tab=report');
   await page.getByRole('button', { name: '2. 分歧', exact: true }).click();
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
   const body = page.getByRole('textbox', { name: '报告正文', exact: true });
   await body.fill('用户尚未保存的修改 [@sf_one]');
   const previousReads = detailReads;
@@ -95,5 +96,5 @@ test('报告列表出现新版本时不自动切换已选版本', async ({ page 
   items = [{ ...state.version, id: 'report2', revision: 2 }, state.version];
   await expect(version.locator('option')).toHaveCount(2);
   await expect(version).toHaveValue('report1');
-  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue('The method uses a graph. [@sf_one]');
+  await expect(page.getByTestId('report-preview')).toContainText('The method uses a graph. [1]');
 });

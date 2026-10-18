@@ -16,7 +16,8 @@ test('真实 API 与独立 worker 完成科研调研', async ({ page, request },
   await page.getByRole('checkbox', { name: '纳入 Synthetic Graph Collaboration B', exact: true }).check();
   await page.getByRole('button', { name: '确认纳入并分析' }).click();
   await page.getByRole('link', { name: '研究报告', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toBeVisible({ timeout: 40000 });
+  await expect(page.getByTestId('report-preview')).toBeVisible({ timeout: 40000 });
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(page.getByText('质量检查通过', { exact: true }).first()).toBeVisible();
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('A user edited interpretation. [@' +
     (await page.getByRole('textbox', { name: '报告正文', exact: true }).inputValue()).split('[@')[1]);

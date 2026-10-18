@@ -56,6 +56,12 @@
 .sf-report-layout>* {min-width:0;} .sf-report-outline button {display:block; width:100%; margin:8px 0; text-align:left;}
 .sf-outline-active {color:#2855d9!important; background:#edf3ff!important;}
 .sf-shell textarea.sf-report-textarea {min-height:420px; max-height:1000px; font-family:ui-monospace,monospace; font-size:14px; line-height:1.9;}
+.sf-report-preview {margin-top:16px; overflow-wrap:anywhere;}
+.sf-report-preview a[href^="#sf-reference-"] {color:#2855d9; text-decoration:underline;}
+.sf-report-references {border-top:1px solid #e4e9f2; padding-top:18px;}
+.sf-report-references ol {list-style:none; padding:0; margin:12px 0 0;}
+.sf-report-references li {padding:10px 8px; border-radius:6px;}
+.sf-report-references li:focus {outline:2px solid #2855d9; background:#f4f7ff;}
 .sf-event-list {margin:12px 0; max-height:230px; overflow:auto; font-size:12px;} .sf-event-list li {padding:5px; border-bottom:1px solid #edf0f6;}
 .sf-citation-issue {background:#fff8e9!important; color:#946114!important;}
 @media(min-width:1001px) { .sf-report-layout .sf-mobile-hidden {display:block;} }

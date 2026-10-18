@@ -1,5 +1,10 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mockReport } from './report-fixtures';
+
+async function editReport(page: Page) {
+  await page.goto('/projects/p1?tab=report');
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
+}
 
 test('保存响应等待期间锁定编辑，成功后保留已提交文字', async ({ page }) => {
   const state = await mockReport(page);
@@ -9,7 +14,7 @@ test('保存响应等待期间锁定编辑，成功后保留已提交文字', as
     if (route.request().method() === 'POST') await pending;
     await route.fallback();
   });
-  await page.goto('/projects/p1?tab=report');
+  await editReport(page);
   const body = page.getByRole('textbox', { name: '报告正文', exact: true });
   await body.fill('等待保存的正文 [@sf_one]');
   await page.getByRole('button', { name: '保存新报告版本' }).click();
@@ -24,7 +29,7 @@ test('编辑后选择论断和现有原文，明确重新绑定引用', async ({
   const state = await mockReport(page);
   await page.route('**/api/scholarflow/reports/*/citation-options', route => route.fulfill({ json: { items: [
     { key: 'sf_one', title: '科研论文 a', claim_revision_id: 'claim1', evidence_id: 'e1', quote: 'The method uses a graph.', source_scope: 'fulltext', locator_status: 'located' } ] } }));
-  await page.goto('/projects/p1?tab=report');
+  await editReport(page);
   const body = page.getByRole('textbox', { name: '报告正文', exact: true });
   await body.fill('🧪 The method uses a graph! [@sf_one]');
   await body.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(0, 26));
@@ -37,7 +42,7 @@ test('编辑后选择论断和现有原文，明确重新绑定引用', async ({
 });
 
 test('编辑段落后相关引用待复核，未保存时不能导出', async ({ page }) => {
-  await mockReport(page); await page.goto('/projects/p1?tab=report');
+  await mockReport(page); await editReport(page);
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('本地修改 [@sf_one]');
   await expect(page.getByText('存在未保存修改', { exact: true })).toBeVisible();
   await expect(page.getByText('引用待复核', { exact: true })).toBeVisible();
@@ -45,7 +50,7 @@ test('编辑段落后相关引用待复核，未保存时不能导出', async ({
 });
 
 test('保存冲突保留本地报告', async ({ page }) => {
-  await mockReport(page, { conflict: true }); await page.goto('/projects/p1?tab=report');
+  await mockReport(page, { conflict: true }); await editReport(page);
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('本地未保存正文');
   await page.getByRole('button', { name: '保存新报告版本' }).click();
   await expect(page.getByRole('alert').filter({ hasText: '输入已保留' })).toBeVisible();
@@ -70,7 +75,7 @@ test('事件断线后按序号补读并去重', async ({ page }) => {
 });
 
 test('Markdown 预览不执行原始事件处理器', async ({ page }) => {
-  await mockReport(page); await page.goto('/projects/p1?tab=report');
+  await mockReport(page); await editReport(page);
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('<img src=x onerror="window.__sfXss=true">');
   await page.getByRole('button', { name: '预览正文' }).click();
   await expect(page.getByTestId('report-preview').locator('[onerror]')).toHaveCount(0);
@@ -78,9 +83,10 @@ test('Markdown 预览不执行原始事件处理器', async ({ page }) => {
 });
 
 test('刷新恢复此报告版本的临时草稿', async ({ page }) => {
-  await mockReport(page); await page.goto('/projects/p1?tab=report');
+  await mockReport(page); await editReport(page);
   await page.getByRole('textbox', { name: '报告正文', exact: true }).fill('刷新前的本地草稿');
   await expect(page.getByText('存在未保存修改', { exact: true })).toBeVisible();
   await page.reload();
+  await page.locator('.sf-report-editor').getByRole('button', { name: '编辑正文', exact: true }).click();
   await expect(page.getByRole('textbox', { name: '报告正文', exact: true })).toHaveValue('刷新前的本地草稿');
 });
