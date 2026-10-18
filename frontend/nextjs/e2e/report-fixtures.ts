@@ -27,7 +27,8 @@ export async function mockReport(page: Page, options: { conflict?: boolean; reco
     outdated: false, citations: state.version.occurrences, references: [{ number: 1, key: 'sf_one', title: '科研论文 a' }], rendered_markdown: '' } }));
   await page.route('**/api/scholarflow/reports/*/exports', route => route.fulfill({ json: { items: [] } }));
   await page.route('**/api/scholarflow/reports/*/citation-options', route => route.fulfill({ json: { items: [
-    { key: 'sf_one', title: '科研论文 a', claim_revision_id: 'claim1', evidence_id: 'e1', quote: text, source_scope: 'fulltext', locator_status: 'located' } ] } }));
+    { key: 'sf_one', title: '科研论文 a', claim_revision_id: 'claim1', evidence_id: 'e1', quote: text, source_scope: 'fulltext', locator_status: 'located' },
+    { key: 'sf_one', title: '科研论文 a', claim_revision_id: 'claim2', evidence_id: 'e2', quote: text, source_scope: 'fulltext', locator_status: 'located' } ] } }));
   await page.route('**/api/scholarflow/projects/p1/runs', route => route.fulfill({ json: { items: [state.currentRun] } }));
   await page.route('**/api/scholarflow/runs/run1', route => route.fulfill({ json: state.currentRun }));
   await page.route('**/api/scholarflow/runs/run1/actions', route => {

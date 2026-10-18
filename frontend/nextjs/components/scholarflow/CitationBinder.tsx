@@ -6,12 +6,12 @@ import { messageFor, scholarRequest } from '@/lib/scholarflow/api';
 interface Option { key: string; title: string; claim_revision_id: string; evidence_id: string;
   quote: string; source_scope: string; locator_status: string }
 
-export default function CitationBinder({ versionId, block, bindings, editor, disabled, onChange, onConfirm }: {
+export default function CitationBinder({ versionId, block, bindings, editor, disabled, onChange, onConfirm, initialTokenIndex = 0 }: {
   versionId: string; block: ReportBlock; bindings: CitationBinding[]; editor: RefObject<HTMLTextAreaElement>;
-  disabled: boolean; onChange: (block: ReportBlock) => void; onConfirm: () => void;
+  disabled: boolean; onChange: (block: ReportBlock) => void; onConfirm: () => void; initialTokenIndex?: number;
 }) {
   const [options, setOptions] = useState<Option[]>([]), [error, setError] = useState('');
-  const [token, setToken] = useState('0'), [evidence, setEvidence] = useState(''), [insertKey, setInsertKey] = useState(bindings[0]?.key || '');
+  const [token, setToken] = useState(String(initialTokenIndex)), [evidence, setEvidence] = useState(''), [insertKey, setInsertKey] = useState(bindings[0]?.key || '');
   const [span, setSpan] = useState<{ start: number; end: number }>();
   const [notice, setNotice] = useState('');
   useEffect(() => {
@@ -21,6 +21,7 @@ export default function CitationBinder({ versionId, block, bindings, editor, dis
     return () => { alive = false; };
   }, [versionId]);
   useEffect(() => { setSpan(undefined); setNotice(''); }, [block.text]);
+  useEffect(() => { setToken(String(initialTokenIndex)); setEvidence(''); setSpan(undefined); setNotice(''); }, [initialTokenIndex]);
   const tokens = Array.from(block.text.matchAll(/\[@(sf_[A-Za-z0-9_]+)\]/g));
   const current = tokens[Number(token)];
   const candidates = options.filter(item => item.key === current?.[1]);

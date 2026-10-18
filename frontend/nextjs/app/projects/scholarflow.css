@@ -64,6 +64,12 @@
 .sf-report-references li:focus {outline:2px solid #2855d9; background:#f4f7ff;}
 .sf-event-list {margin:12px 0; max-height:230px; overflow:auto; font-size:12px;} .sf-event-list li {padding:5px; border-bottom:1px solid #edf0f6;}
 .sf-citation-issue {background:#fff8e9!important; color:#946114!important;}
+.sf-citation-button {width:100%;}
+.sf-shell button.sf-citation-selected {border-color:#2855d9; box-shadow:0 0 0 2px #2855d924;}
+.sf-citation-list {gap:12px;}
+.sf-citation-detail {margin-top:12px; padding:12px; border-left:3px solid #7497e8; background:#f7f9fe; overflow-wrap:anywhere;}
+.sf-citation-detail p,.sf-citation-detail h4 {margin:10px 0;}
+.sf-citation-detail .sf-source-quote {padding:10px; max-height:240px; overflow:auto;}
 @media(min-width:1001px) { .sf-report-layout .sf-mobile-hidden {display:block;} }
 @media(max-width:1000px) { .sf-evidence-layout {grid-template-columns:minmax(0,1fr);} .sf-mobile-switch {display:flex;} .sf-mobile-hidden {display:none;} .sf-pdf {height:65vh;} }
 @media(max-width:1000px) { .sf-report-layout {grid-template-columns:minmax(0,1fr);} .sf-report-outline {display:flex; overflow:auto; gap:8px; padding:12px;} .sf-report-outline h3 {display:none;} .sf-report-outline button {white-space:nowrap;width:auto;} }

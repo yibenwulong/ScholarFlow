@@ -6,7 +6,8 @@ const live = process.env.SCHOLARFLOW_LIVE_TEST === 'true';
 const apiPort = process.env.PLAYWRIGHT_API_PORT || '8100';
 const python = process.env.PLAYWRIGHT_PYTHON || path.resolve(__dirname, '../..', process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python');
 const frontend = { command: `npm run dev -- --hostname 127.0.0.1 --port ${port}`,
-  url: `http://127.0.0.1:${port}/img/gptr-black-logo.png`, reuseExistingServer: false, timeout: 120000,
+  // Compile the actual workspace route before timed browser tests begin.
+  url: `http://127.0.0.1:${port}/projects/__playwright_warmup__?tab=report`, reuseExistingServer: false, timeout: 180000,
   env: { NEXT_TELEMETRY_DISABLED: '1', SCHOLARFLOW_API_URL: `http://127.0.0.1:${apiPort}` } };
 export default defineConfig({
   testDir: './e2e', timeout: 45000, expect: { timeout: 10000 }, fullyParallel: false,
