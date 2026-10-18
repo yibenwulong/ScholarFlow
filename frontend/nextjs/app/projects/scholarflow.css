@@ -37,9 +37,9 @@
 .sf-stat { border:1px solid #dce3ed; border-radius:10px; padding:15px 20px; background:white; }
 .sf-stat strong { display:block; font-size:25px; font-weight:700; }
 .sf-empty { text-align:center; padding:45px 24px; color:#64748b; }
-.sf-paper { padding:22px; border:1px solid #dce3ed; background:white; border-radius:11px; }
-.sf-paper-title { font-size:17px; font-weight:700; }
-.sf-check-label { display:flex!important; align-items:center; gap:10px; margin:0!important; }
+.sf-paper { padding:22px; border:1px solid #dce3ed; background:white; border-radius:11px; min-width:0; }
+.sf-paper-title { font-size:17px; font-weight:700; min-width:0; overflow-wrap:anywhere; }
+.sf-check-label { display:flex!important; align-items:center; gap:10px; margin:0!important; min-width:0; max-width:100%; }
 .sf-paper-controls { border-top:1px solid #e7ebf2; padding-top:12px; margin-top:15px; display:grid; grid-template-columns:1fr 2fr; gap:12px; }
 .sf-small { font-size:12px; }
 .sf-project-link { display:block; transition:border-color .2s; }

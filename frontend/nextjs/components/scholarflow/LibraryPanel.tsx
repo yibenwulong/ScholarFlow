@@ -5,6 +5,7 @@ import type { Decision, Plan, ProjectPaper, Run, Selection } from '@/types/schol
 import { decisionLabels } from '@/types/scholarflow';
 import { api, keyFor, messageFor, scholarRequest, write } from '@/lib/scholarflow/api';
 import { activeAnalysis, awaitingSelection } from '@/lib/scholarflow/runs';
+import { paperLinks } from '@/lib/scholarflow/paperLinks';
 
 export default function LibraryPanel({ projectId, papers, selections, plans, runs, onRefresh }: {
   projectId: string; papers: ProjectPaper[]; selections: Selection[]; plans: Plan[]; runs: Run[]; onRefresh: () => Promise<void>;
@@ -67,6 +68,7 @@ export default function LibraryPanel({ projectId, papers, selections, plans, run
 
 function PaperRow({ paper, selected, onSelect, onRefresh, onUpload }: { paper: ProjectPaper; selected: boolean; onSelect: (checked: boolean) => void;
   onRefresh: () => Promise<void>; onUpload: (file: File) => Promise<void> }) {
+  const links = paperLinks(paper);
   const [decision, setDecision] = useState<Decision>(paper.human_decision), [reason, setReason] = useState(paper.reason), [notes, setNotes] = useState(paper.notes);
   const [baseRevision, setBaseRevision] = useState(paper.revision), [dirty, setDirty] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   useEffect(() => { if (!dirty) { setDecision(paper.human_decision); setReason(paper.reason); setNotes(paper.notes); setBaseRevision(paper.revision); } }, [paper, dirty]);
@@ -79,6 +81,13 @@ function PaperRow({ paper, selected, onSelect, onRefresh, onUpload }: { paper: P
     <p className="sf-muted sf-small" style={{ margin: '8px 0' }}>{paper.version.authors.join(' · ') || '作者未报告'} · {paper.version.year || '年份未报告'} · {paper.version.publication_status === 'preprint' ? '预印本' : paper.version.publication_status === 'published' ? '已发表' : '出版状态待核对'}</p>
     <div className="sf-row"><span className="sf-badge">AI 建议：{decisionLabels[paper.ai_recommendation]}</span><span className="sf-badge sf-green">人工决定：{decisionLabels[paper.human_decision]}</span>
       <span className="sf-badge">{paper.documents.some(d => d.kind === 'pdf' && d.parse_status === 'ready') ? '有可读全文' : paper.version.abstract ? '有摘要 · 全文待补充' : '缺少可读原文'}</span></div>
+    <div className="sf-row" style={{ marginTop: 12 }}>
+      {links.pdf && <a className="sf-button" href={links.pdf.href} download={links.pdf.filename}
+        target={links.pdf.filename ? undefined : '_blank'} rel={links.pdf.filename ? undefined : 'noopener noreferrer'}
+        title={links.pdf.filename || '在来源网站打开 PDF，可在浏览器中下载'}>{links.pdf.filename ? '下载 PDF' : 'PDF 下载链接'}</a>}
+      {links.details && <a className="sf-button" href={links.details} target="_blank" rel="noopener noreferrer">论文详情</a>}
+      {!links.pdf && <span className="sf-muted sf-small">{links.details ? '暂无公开 PDF 下载链接' : '暂无下载链接，可补充 PDF'}</span>}
+    </div>
     {paper.ai_reason && <p className="sf-muted sf-small" style={{ marginTop: 8 }}>建议理由：{paper.ai_reason}</p>}
     <details style={{ marginTop: 12 }}><summary>摘要与文献标识</summary><p style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{paper.version.abstract || '来源未提供摘要'}</p>
       <p className="sf-muted sf-small" style={{ overflowWrap: 'anywhere', marginTop: 8 }}>{Object.entries(paper.version.identifiers).map(([name, value]) => name + ': ' + value).join(' · ')}</p></details>
