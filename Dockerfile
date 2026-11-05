@@ -1,4 +1,4 @@
-FROM python:3.13-slim-bookworm
+FROM python:3.15-slim-bookworm
 WORKDIR /usr/src/app
 ENV PYTHONUNBUFFERED=1 PIP_ROOT_USER_ACTION=ignore SCHOLARFLOW_DATA_DIR=/usr/src/app/data/scholarflow
 RUN apt-get update && apt-get install -y --no-install-recommends \
